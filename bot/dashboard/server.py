@@ -91,6 +91,7 @@ async def ws_handler(request):
 async def _push_loop(app):
     """Background task: push state snapshots to all WS clients every 1.5s."""
     log.info("Dashboard push loop started")
+    global _ws_clients
     try:
         while True:
             await asyncio.sleep(1.5)
@@ -106,7 +107,7 @@ async def _push_loop(app):
                     except Exception:
                         dead.add(ws)
                 if dead:
-                    _ws_clients -= dead
+                    _ws_clients.difference_update(dead)
                     log.debug("Removed %d dead WS clients", len(dead))
             except Exception as e:
                 log.warning("Dashboard push error: %s", e)
