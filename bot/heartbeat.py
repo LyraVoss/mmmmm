@@ -165,8 +165,12 @@ class Heartbeat:
         if AUTO_IDENTITY:
             id_ok = await ensure_identity(self.api)
             if not id_ok:
-                log.info("Identity registration pending. Retrying in 30s.")
-                await asyncio.sleep(30)
+                if not ADVANCED_MODE:
+                    log.info("Waiting for manual identity registration on the website... checking again in 2m.")
+                    await asyncio.sleep(120)
+                else:
+                    log.info("Identity registration pending/failed. Retrying in 30s.")
+                    await asyncio.sleep(30)
                 return
         else:
             log.info("Identity auto-registration skipped (AUTO_IDENTITY=false)")

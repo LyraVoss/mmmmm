@@ -32,26 +32,40 @@ log = get_logger(__name__)
 def _update_dz_knowledge(view: dict):
     """Continuously track death zones from every agent_view."""
     from bot.strategy.brain import _map_knowledge
+    # Initialize risk scores if missing
+    risk_scores = _map_knowledge.setdefault("risk_scores", {})
+    
     for region in view.get("visibleRegions", []):
         if isinstance(region, dict) and region.get("isDeathZone"):
             rid = region.get("id", "")
             if rid:
                 _map_knowledge["death_zones"].add(rid)
+                risk_scores[rid] = 1.0 # Absolute danger
+        elif isinstance(region, dict) and region.get("isDeathZonePending"):
+            rid = region.get("id", "")
+            if rid:
+                risk_scores[rid] = 0.8 # High danger incoming
+
     for conn in view.get("connectedRegions", []):
         if isinstance(conn, dict) and conn.get("isDeathZone"):
             rid = conn.get("id", "")
             if rid:
                 _map_knowledge["death_zones"].add(rid)
+                risk_scores[rid] = 1.0
+
     cur = view.get("currentRegion", {})
     if isinstance(cur, dict) and cur.get("isDeathZone"):
         rid = cur.get("id", "")
         if rid:
             _map_knowledge["death_zones"].add(rid)
+            risk_scores[rid] = 1.0
+
     for dz in view.get("pendingDeathzones", []):
         if isinstance(dz, dict):
             rid = dz.get("id", "")
             if rid:
                 _map_knowledge["death_zones"].add(rid)
+                risk_scores[rid] = 0.8
         elif isinstance(dz, str):
             _map_knowledge["death_zones"].add(dz)
 

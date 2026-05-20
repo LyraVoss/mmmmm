@@ -87,7 +87,7 @@ WEATHER_COMBAT_PENALTY = {
 # ── Single definition of global state ────────────────────────────────
 # FIX v1.5.3: removed duplicate _known_agents that was also defined at line 412
 _known_agents: dict = {}
-_map_knowledge: dict = {"revealed": False, "death_zones": set(), "safe_center": []}
+_map_knowledge: dict = {"revealed": False, "death_zones": set(), "safe_center": [], "risk_scores": {}}
 # FIX v1.5.6: track picked up item IDs to prevent double-pickup on stale view
 _picked_up_ids: set = set()
 
@@ -871,8 +871,12 @@ def _choose_move_target(connections, danger_ids: set,
 
             score = 0
             terrain = conn.get("terrain", "").lower()
-            terrain_scores = {"hills": 4, "plains": 2, "ruins": 2, "forest": 1, "water": -3}
+            terrain_scores = {"hills": 6, "plains": 2, "ruins": 4, "forest": 3, "water": -5}
             score += terrain_scores.get(terrain, 0)
+
+            # Apply persistent Risk Penalty
+            risk = risk_scores.get(rid, 0.0)
+            score -= (risk * 20)  # Heavy penalty for DZ proximity
 
             if rid in item_regions:
                 score += 5

@@ -29,7 +29,8 @@ async def ensure_identity(api: MoltyAPI) -> bool:
     if not ADVANCED_MODE:
         log.info(
             "ERC-8004 identity not registered. In default mode, "
-            "register manually then set the tokenId."
+            "please register manually at https://www.moltyroyale.com "
+            "using your Owner EOA wallet."
         )
         return False
 
