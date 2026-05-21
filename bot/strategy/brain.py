@@ -148,7 +148,7 @@ def mark_item_picked_up(item_id: str):
     _picked_up_ids.add(item_id)
 
 
-def decide_action(view: dict, can_act: bool, lessons: list = None) -> dict | None:
+def decide_action(view: dict, can_act: bool, lessons: list | None = None) -> dict | None:
     """
     Main decision engine. Returns action dict or None (wait).
 
@@ -371,7 +371,9 @@ def decide_action(view: dict, can_act: bool, lessons: list = None) -> dict | Non
     if enemies and ep >= 2 and hp >= hp_threshold and not avoid_combat_weather:
         target = _select_weakest(enemies)
         w_range = get_weapon_range(equipped)
-        if _is_in_range(target, region_id, w_range, connections):
+        # v1.6.3: Strictly enforce melee (range 0) vs adjacent (range > 0)
+        target_region = target.get("regionId", region_id)
+        if (w_range == 0 and target_region == region_id) or (w_range > 0 and _is_in_range(target, region_id, w_range, connections)):
             my_dmg = calc_damage(atk, get_weapon_bonus(equipped),
                                  target.get("def", 5), region_weather)
             enemy_dmg = calc_damage(target.get("atk", 10),
@@ -848,7 +850,10 @@ def _select_facility(interactables: list, hp: int, ep: int) -> dict | None:
 
 def _choose_move_target(connections, danger_ids: set,
                          current_region: dict, visible_items: list,
-                         alive_count: int) -> str | None:
+                         alive_count: int, is_night: bool = False,
+                         play_stealthy: bool = False,
+                         be_aggressive: bool = False,
+                         prioritize_looting: bool = False) -> str | None:
     candidates = []
     item_regions = set()
     for item in visible_items:
@@ -871,12 +876,23 @@ def _choose_move_target(connections, danger_ids: set,
 
             score = 0
             terrain = conn.get("terrain", "").lower()
-            terrain_scores = {"hills": 6, "plains": 2, "ruins": 4, "forest": 3, "water": -5}
+            
+            # Dynamic terrain weighting based on tactical mode
+            terrain_scores = {"hills": 6, "plains": 2, "ruins": 4, "forest": 3, "water": -10}
+            if play_stealthy:
+                terrain_scores["forest"] += 10 # Hide in trees
+                terrain_scores["hills"] -= 5   # Avoid silhouette on high ground
+            if be_aggressive and not is_night:
+                terrain_scores["hills"] += 8   # Maximize vision for hunting
+
             score += terrain_scores.get(terrain, 0)
 
-            # Apply persistent Risk Penalty
-            risk = risk_scores.get(rid, 0.0)
-            score -= (risk * 20)  # Heavy penalty for DZ proximity
+            # Apply persistent Risk Penalty from world model
+            risk = _map_knowledge.get("risk_scores", {}).get(rid, 0.0)
+            score -= (risk * 25)  # Heavy penalty for DZ proximity
+
+            if prioritize_looting and rid in item_regions:
+                score += 15
 
             if rid in item_regions:
                 score += 5

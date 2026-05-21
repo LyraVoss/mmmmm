@@ -157,10 +157,12 @@ class WebSocketEngine:
             if isinstance(view, dict) and view:
                 self.last_view = view
                 reason = msg.get("reason", "initial")
-                alive = view.get("self", {}).get("isAlive", "?")
-                hp = view.get("self", {}).get("hp", "?")
-                ep = view.get("self", {}).get("ep", "?")
-                log.info("agent_view (reason=%s) alive=%s HP=%s EP=%s", reason, alive, hp, ep)
+                # Check for death and exit early if requested
+                if not view.get("self", {}).get("isAlive", True):
+                    log.info("☠️ Agent death detected. Exiting engine early.")
+                    self.game_result = {"type": "game_ended", "view": view, "status": "dead"}
+                    return self.game_result
+                
                 await self._on_agent_view(view)
             else:
                 log.warning("agent_view with empty/invalid view: %s", str(view)[:100])
@@ -380,6 +382,8 @@ class WebSocketEngine:
             lessons = self.memory.get_lessons()
 
         can_act = self.action_sender.can_send_cooldown_action()
+        # Inject turn number for Day/Night awareness
+        view["turn"] = getattr(self, "last_turn_num", 1)
         decision = decide_action(view, can_act, lessons=lessons)
 
         if decision is None:

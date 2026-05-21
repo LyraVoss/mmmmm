@@ -38,14 +38,16 @@ async def settle_game(game_result: dict, entry_type: str, memory: AgentMemory):
 
     # ── Record lessons for cross-game brain adaptation (v1.5.3) ──────
     if is_winner:
-        memory.add_lesson(f"DIRECTIVE:MAINTAIN_PACE - won with {kills} kills at rank {final_rank}")
+        memory.add_lesson(f"DIRECTIVE:MAINTAIN_PACE - {kills} kills - stay aggro")
     elif final_rank <= 3:
-        memory.add_lesson(f"DIRECTIVE:CONSERVATIVE_ENDGAME - rank {final_rank} - prioritize survival")
+        memory.add_lesson(f"DIRECTIVE:CONSERVATIVE - rank {final_rank} - prioritize survival")
     elif kills == 0:
-        # Brain reads this → activates be_aggressive mode
-        memory.add_lesson("DIRECTIVE:LOW_AGGRESSION - zero kills - increase guardian farming priority")
+        memory.add_lesson("DIRECTIVE:LOW_AGGRESSION - zero kills - hunt guardians more")
     elif kills >= 5:
-        memory.add_lesson(f"DIRECTIVE:STRIKER - high kill game ({kills} kills) - aggression confirmed")
+        memory.add_lesson(f"DIRECTIVE:STRIKER - {kills} kills confirmed")
+
+    if final_rank > 30:
+        memory.add_lesson(f"DIRECTIVE:EARLY_EXIT - rank {final_rank} - focus on ruins/looting")
 
     # Rank-based lessons
     if final_rank > 20 and kills == 0:

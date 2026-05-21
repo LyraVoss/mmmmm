@@ -159,7 +159,8 @@ def create_app() -> web.Application:
 
     # Routes
     app.router.add_get("/", index_handler)
-    app.router.add_route('OPTIONS', '/{path_info:.*}', lambda r: web.Response(status=200))
+    async def options_handler(request): return web.Response(status=200)
+    app.router.add_route('OPTIONS', '/{path_info:.*}', options_handler)
     app.router.add_get("/api/state", api_state)
     app.router.add_get("/api/accounts", api_accounts)
     app.router.add_post("/api/accounts", api_accounts_post)

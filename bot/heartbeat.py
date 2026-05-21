@@ -99,6 +99,9 @@ class Heartbeat:
         log.info("Agent stopped.")
 
     async def _heartbeat_cycle(self):
+        if not self.api:
+            return
+
         try:
             me = await self.api.get_accounts_me()
         except APIError as e:
