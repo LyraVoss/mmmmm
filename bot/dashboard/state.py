@@ -64,6 +64,9 @@ class DashboardState:
             "lessons": [],
         }
 
+        # ── User Input Queue (Manual Commands) ─────────────────
+        self.pending_user_messages: dict[str, deque] = {} # {agent_id: deque([msg1, msg2])}
+
     # ── Bot writes ─────────────────────────────────────────────
 
     def update_agent(self, agent_id: str, data: dict):
@@ -86,6 +89,18 @@ class DashboardState:
         self.global_logs.append(entry)
         if agent_id and agent_id in self.agent_logs:
             self.agent_logs[agent_id].append(entry)
+
+    def add_user_message(self, agent_id: str, message: str):
+        """Queues a message from the dashboard user for the agent to say in-game."""
+        if agent_id not in self.pending_user_messages:
+            self.pending_user_messages[agent_id] = deque(maxlen=10)
+        self.pending_user_messages[agent_id].append(message)
+
+    def pop_user_message(self, agent_id: str) -> str | None:
+        """Retrieves the next manual message for the agent."""
+        if agent_id in self.pending_user_messages and self.pending_user_messages[agent_id]:
+            return self.pending_user_messages[agent_id].popleft()
+        return None
 
     def update_memory(self, memory_data: dict):
         """Update cross-game memory stats from AgentMemory."""

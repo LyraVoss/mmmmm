@@ -226,7 +226,7 @@ class Heartbeat:
         await self.memory.save()
 
         # FIX v1.5.3: pass memory to engine so brain gets cross-game lessons
-        engine = WebSocketEngine(game_id, agent_id, memory=self.memory)
+        engine = WebSocketEngine(game_id, agent_id, memory=self.memory, api=self.api)
         engine.dashboard_key = self._agent_key
         engine.dashboard_name = self._agent_name
         game_result = await engine.run()

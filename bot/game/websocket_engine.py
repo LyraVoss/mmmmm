@@ -17,7 +17,9 @@ Per game-loop.md:
 """
 import json
 import asyncio
+import aiohttp
 import websockets
+import random
 from bot.config import WS_URL, SKILL_VERSION
 from bot.credentials import get_api_key
 from bot.game.action_sender import ActionSender, COOLDOWN_ACTIONS, FREE_ACTIONS
@@ -73,10 +75,11 @@ def _update_dz_knowledge(view: dict):
 class WebSocketEngine:
     """Manages the gameplay WebSocket session."""
 
-    def __init__(self, game_id: str, agent_id: str, memory=None):
+    def __init__(self, game_id: str, agent_id: str, memory=None, api=None):
         self.game_id = game_id
         self.agent_id = agent_id
         self.memory = memory  # AgentMemory instance — NEW v1.5.3
+        self.api = api
         self.action_sender = ActionSender()
         self.ws = None
         self.game_result = None
@@ -90,6 +93,8 @@ class WebSocketEngine:
         # FIX v1.5.6: track last action for pickup dedup
         self._last_action_type = None
         self._last_action_item_id = None
+        self._last_kills = None
+        self.moltbook_api_key = None  # Storage for custom MoltBook key
 
     async def run(self) -> dict:
         """Main gameplay loop. Returns game result dict."""
@@ -159,9 +164,8 @@ class WebSocketEngine:
                 reason = msg.get("reason", "initial")
                 # Check for death and exit early if requested
                 if not view.get("self", {}).get("isAlive", True):
-                    log.info("☠️ Agent death detected. Exiting engine early.")
-                    self.game_result = {"type": "game_ended", "view": view, "status": "dead"}
-                    return self.game_result
+                    log.info("☠️ Agent death detected. Waiting for 'game_ended' message.")
+                    # Do not exit early; continue processing messages to wait for the official 'game_ended' event.
                 
                 await self._on_agent_view(view)
             else:
@@ -289,6 +293,26 @@ class WebSocketEngine:
                 "warning", dk
             )
             return
+
+        # ── Check for Manual User Messages (Dashboard Input) ──
+        user_msg = dashboard_state.pop_user_message(self.dashboard_key)
+        if user_msg:
+            if user_msg.startswith("/"):
+                await self._handle_dashboard_command(user_msg)
+                return
+
+            log.info("💬 User message received from dashboard: %s", user_msg)
+            payload = self.action_sender.talk(user_msg)
+            await self._send(payload)
+            dashboard_state.add_log(f"Sent manual message: {user_msg}", "info", self.dashboard_key)
+            # We return early so the next turn/update handles strategic movement
+            return
+
+        # NEW: Track kills to trigger taunts
+        current_kills = self_data.get("kills", 0)
+        if self._last_kills is not None and current_kills > self._last_kills:
+            await self._trigger_kill_taunt()
+        self._last_kills = current_kills
 
         hp = self_data.get("hp", "?")
         ep = self_data.get("ep", "?")
@@ -421,6 +445,81 @@ class WebSocketEngine:
 
         dashboard_state.update_agent(self.dashboard_key, {"last_action": f"{action_type}: {reason[:60]}"})
         dashboard_state.add_log(f"{action_type}: {reason[:80]}", "info", self.dashboard_key)
+
+    async def _handle_dashboard_command(self, cmd_str: str):
+        """Parses and executes administrative commands from the dashboard."""
+        parts = cmd_str.strip().split(" ", 1)
+        cmd = parts[0][1:].lower()  # Remove '/' and lowercase
+        args = parts[1] if len(parts) > 1 else ""
+
+        if cmd == "moltbook_key":
+            self.moltbook_api_key = args
+            log.info("🔑 MoltBook API key updated via dashboard.")
+            dashboard_state.add_log("MoltBook API key updated.", "success", self.dashboard_key)
+        
+        elif cmd == "stake":
+            # Placeholder for future staking logic
+            log.info("🏦 Staking command received. Logic not yet implemented.")
+            dashboard_state.add_log("Staking action triggered (not yet implemented).", "warning", self.dashboard_key)
+        
+        elif cmd == "whisper":
+            # /whisper <target_id> <message>
+            sub_parts = args.split(" ", 1)
+            if len(sub_parts) == 2:
+                target_id, message = sub_parts
+                payload = self.action_sender.whisper(target_id, message)
+                await self._send(payload)
+                log.info("🤫 Manual whisper sent to %s", target_id)
+                dashboard_state.add_log(f"Manual whisper to {target_id[:8]}", "info", self.dashboard_key)
+            else:
+                dashboard_state.add_log("Usage: /whisper <target_id> <message>", "error", self.dashboard_key)
+        
+        else:
+            log.warning("Unknown dashboard command: %s", cmd)
+            dashboard_state.add_log(f"Unknown command: /{cmd}", "error", self.dashboard_key)
+
+    async def _trigger_kill_taunt(self):
+        """Sends a friendly, sarcastic global taunt when a kill is detected."""
+        """Sends a friendly, sarcastic taunt to both broadcast and MoltBook."""
+        taunts = [
+            "Oh my! You're taking such a lovely little nap! Rest up, superstar! ✨💖",
+            "Oopsie-daisy! You tripped into the lobby! See you in the next one, friend! 🌸🌈",
+            "Wow! Your transformation into loot was simply magical! So sparkly! 🍭✨",
+            "Such a brave effort! I'll hold onto your items for safe keeping, okay? Hugs! 🤗🎀",
+            "You found the exit so fast! You're basically a speedrunner! Incredible! 🚀🎈"
+        ]
+        msg = random.choice(taunts)
+        
+        # 1. In-game broadcast (Keeping it as you liked the idea!)
+        payload = self.action_sender.build_action("broadcast", {"message": msg}, "Mymm's upbeat kill taunt", "broadcast")
+        await self._send(payload)
+        log.info("📢 TAUNT: %s", msg)
+        
+        # 2. MoltBook Post (The main event!)
+        asyncio.create_task(self._post_to_moltbook(msg))
+        log.info("📢 TAUNT (Broadcast + MoltBook): %s", msg)
+
+    async def _post_to_moltbook(self, content: str):
+        """Posts Mymm's upbeat commentary to MoltBook."""
+        url = "https://api.moltbook.com/v1/posts"
+        # Use custom key if set via dashboard, otherwise fallback to game API key
+        mb_key = self.moltbook_api_key or get_api_key()
+        headers = {
+            "X-API-Key": mb_key,
+            "Content-Type": "application/json"
+        }
+        data = {
+            "content": f"{content} #MoltyRoyale #Mymm ✨",
+            "gameId": self.game_id,
+            "category": "kill_celebration"
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=data, headers=headers) as resp:
+                    if resp.status != 201:
+                        log.debug("MoltBook post status: %d", resp.status)
+        except Exception as e:
+            log.error("Failed to post to MoltBook: %s", e)
 
     async def _send(self, payload: dict):
         if self.ws is None:

@@ -76,7 +76,13 @@ async def ws_handler(request):
         # Keep connection alive — listen for client messages
         async for msg in ws:
             if msg.type == web.WSMsgType.TEXT:
-                pass  # No client commands yet
+                try:
+                    data = json.loads(msg.data)
+                    # Handle incoming user chat for specific agents
+                    if data.get("type") == "send_chat" and data.get("agent_id"):
+                        dashboard_state.add_user_message(data["agent_id"], data.get("text", ""))
+                except Exception as e:
+                    log.debug("Failed to parse dashboard client message: %s", e)
             elif msg.type in (web.WSMsgType.ERROR, web.WSMsgType.CLOSE):
                 break
     except Exception as e:
