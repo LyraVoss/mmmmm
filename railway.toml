@@ -4,4 +4,4 @@ dockerfilePath = "Dockerfile"
 
 [deploy]
 startCommand = "python -m bot.main"
-restartPolicyType = "NEVER"
+restartPolicyType = "Retry"
