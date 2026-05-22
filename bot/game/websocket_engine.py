@@ -268,6 +268,11 @@ class WebSocketEngine:
         elif msg_type == "error":
             err_msg = msg.get("message", msg.get("data", {}).get("message", str(msg)))
             log.error("Server error: %s", err_msg)
+            
+        # ── hp_changed ────────────────────────────────────────────────
+        elif msg_type == "hp_changed":
+            log.info("❤️ HP Changed: Agent %s | Delta: %s | Current HP: %s | Source: %s",
+                     msg.get("agentId", "")[:8], msg.get("delta"), msg.get("currentHp"), msg.get("source"))
 
         else:
             log.info("Unknown WS message type=%s keys=%s", msg_type, list(msg.keys()))
@@ -341,7 +346,9 @@ class WebSocketEngine:
                 log_hash = hash(str(log_entry))
 
             if log_hash not in self._processed_log_hash:
-                dashboard_state.add_log(log_entry, "game", dk)
+                # Pylance Fix: Ensure message is a string for add_log
+                log_msg = json.dumps(log_entry) if isinstance(log_entry, dict) else str(log_entry)
+                dashboard_state.add_log(log_msg, "game", dk)
                 self._processed_log_hash.add(log_hash)
         # Maintain circular buffer of processed log hashes
         if len(self._processed_log_hash) > 100: self._processed_log_hash.clear()
