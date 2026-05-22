@@ -1104,6 +1104,9 @@ def _choose_move_target(connections: List[Any], danger_ids: set,
             score -= (risk * 25)  # Heavy penalty for DZ proximity
 
             # Honey Pot Detection
+            # Pylance Fix: Ensure visible_items is treated as a list and provide typed empty list
+            if _is_honey_pot(rid, visible_items or [], []):
+                score -= (20 * risk_penalty_mult)
                 log.debug("🍯 Honey Pot detected at %s, applying risk penalty", rid[:8])
 
             # Path Prediction Penalty
