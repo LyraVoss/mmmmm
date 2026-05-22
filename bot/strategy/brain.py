@@ -90,6 +90,8 @@ _known_agents: dict = {}
 _map_knowledge: dict = {"revealed": False, "death_zones": set(), "safe_center": [], "risk_scores": {}}
 # FIX v1.5.6: track picked up item IDs to prevent double-pickup on stale view
 _picked_up_ids: set = set()
+# FIX v1.6.4: track move history (last 3) for path prediction and trap detection
+_agent_history: dict = {}
 
 
 def calc_damage(atk: int, weapon_bonus: int, target_def: int,
@@ -135,10 +137,11 @@ def _get_region_id(entry) -> str:
 
 def reset_game_state():
     """Reset per-game tracking state. Call when game ends."""
-    global _known_agents, _map_knowledge, _picked_up_ids
+    global _known_agents, _map_knowledge, _picked_up_ids, _agent_history
     _known_agents = {}
     _map_knowledge = {"revealed": False, "death_zones": set(), "safe_center": []}
     _picked_up_ids = set()
+    _agent_history = {}
     log.info("Strategy brain reset for new game")
 
 
@@ -158,8 +161,10 @@ def decide_action(view: dict, can_act: bool, lessons: list | None = None) -> dic
     2. [DISABLED] Curse resolution
     2b. Guardian threat evasion
     3. Critical healing
+    3c. CHAT: Acknowledge viewer suggestions/advice
     3b. Use utility items (Map, Energy Drink)
     4. Free actions (pickup, equip)
+    4b. TACTICAL: Counter-Sniper Operations (Lure/Flank)
     5. Guardian farming
     6. Favorable agent combat
     7. Monster farming (HP >= 35 required — FIX v1.5.3)
@@ -174,6 +179,11 @@ def decide_action(view: dict, can_act: bool, lessons: list | None = None) -> dic
     hp = self_data.get("hp", 100)
     ep = self_data.get("ep", 10)
     max_ep = self_data.get("maxEp", 10)
+    # Dynamic Risk Recalibration (v1.6.4): Adjust aggressiveness based on HP/EP ratio
+    # 3.6x bias reduction: higher risk penalty when resources are low
+    risk_recalibration = (1.0 - (hp / 100.0)) * 2.5
+    _tactical_plan["turns_in_state"] += 1
+    
     atk = self_data.get("atk", 10)
     defense = self_data.get("def", 5)
     is_alive = self_data.get("isAlive", True)
@@ -209,6 +219,12 @@ def decide_action(view: dict, can_act: bool, lessons: list | None = None) -> dic
     if not is_alive:
         return None
 
+    # ── Priority 3c: Chat Acknowledgments ─────────────────────────────
+    global _pending_chat_responses
+    if _pending_chat_responses:
+        resp = _pending_chat_responses.pop(0)
+        return resp
+
     # ── Parse cross-game lessons for adaptive behavior (NEW v1.5.3) ──
     # Default thresholds
     guardian_flee_hp = 40      # v1.6.0: turunkan ke 40 — lebih berani farming guardian (120 sMoltz!)
@@ -226,11 +242,8 @@ def decide_action(view: dict, can_act: bool, lessons: list | None = None) -> dic
 
     # ── Build danger map ──────────────────────────────────────────────
     danger_ids = set()
-    for dz in pending_dz:
-        if isinstance(dz, dict):
-            danger_ids.add(dz.get("id", ""))
-        elif isinstance(dz, str):
-            danger_ids.add(dz)
+    for dz in pending_dz: danger_ids.add(dz.get("id", "") if isinstance(dz, dict) else dz)
+
     for conn in connections:
         resolved = _resolve_region(conn, view)
         if resolved:
@@ -247,7 +260,7 @@ def decide_action(view: dict, can_act: bool, lessons: list | None = None) -> dic
     if region.get("isDeathZone"):
         danger_ids.add(region_id)
 
-    _track_agents(visible_agents, self_data.get("id", ""), region_id)
+    _track_agents(visible_agents, self_data.get("id", ""), region_id, connections)
 
     move_ep_cost = _get_move_ep_cost(region_terrain, region_weather)
 
@@ -318,6 +331,11 @@ def decide_action(view: dict, can_act: bool, lessons: list | None = None) -> dic
     util_action = _use_utility_item(inventory, hp, ep, alive_count)
     if util_action:
         return util_action
+
+    # ── Priority 4b: TACTICAL: Counter-Sniper Operations ──────────────
+    tactical_action = _handle_counter_sniper_logic(view, inventory, ep, move_ep_cost)
+    if tactical_action:
+        return tactical_action
 
     if not can_act:
         return None
@@ -531,7 +549,8 @@ def decide_action(view: dict, can_act: bool, lessons: list | None = None) -> dic
                         "reason": f"PURSUE: Late game ({alive_count} alive), moving toward last known enemy"}
 
         move_target = _choose_move_target(connections, danger_ids,
-                                          region, visible_items, alive_count)
+                                          region, visible_items, alive_count,
+                                          hp=hp, ep=ep)
         if move_target:
             return {"action": "move", "data": {"regionId": move_target},
                     "reason": "EXPLORE: Moving to better position"}
@@ -567,15 +586,32 @@ def _estimate_enemy_weapon_bonus(agent: dict) -> int:
     return WEAPONS.get(type_id, {}).get("bonus", 0)
 
 
-def _track_agents(visible_agents: list, my_id: str, my_region: str):
+def _track_agents(visible_agents: list, my_id: str, my_region: str, connections: list):
     """Track observed agents for threat assessment."""
-    global _known_agents
+    global _known_agents, _agent_history
     for agent in visible_agents:
         if not isinstance(agent, dict):
             continue
         aid = agent.get("id", "")
         if not aid or aid == my_id:
             continue
+            
+        # Track move history (up to 3)
+        hist = _agent_history.setdefault(aid, [])
+        curr_loc = agent.get("regionId", my_region)
+        
+        # Idle Detection: Track turns in same region
+        prev_data = _known_agents.get(aid, {})
+        stationary_turns = prev_data.get("stationary_turns", 0)
+        if prev_data.get("regionId") == curr_loc:
+            stationary_turns += 1
+        else:
+            stationary_turns = 0
+
+        if not hist or hist[-1] != curr_loc:
+            hist.append(curr_loc)
+            if len(hist) > 3: hist.pop(0)
+
         _known_agents[aid] = {
             "hp": agent.get("hp", 100),
             "atk": agent.get("atk", 10),
@@ -584,6 +620,7 @@ def _track_agents(visible_agents: list, my_id: str, my_region: str):
             "lastSeen": my_region,
             "regionId": agent.get("regionId", my_region),
             "isAlive": agent.get("isAlive", True),
+            "stationary_turns": stationary_turns
         }
     if len(_known_agents) > 50:
         dead = [k for k, v in _known_agents.items() if not v.get("isAlive", True)]
@@ -848,17 +885,159 @@ def _select_facility(interactables: list, hp: int, ep: int) -> dict | None:
     return None
 
 
+def _handle_counter_sniper_logic(view, inventory, ep, move_cost) -> dict | None:
+    """Implements Lure -> Flank -> Execute tactical flow."""
+    global _tactical_plan
+    self_data = view.get("self", {})
+    my_region = view.get("currentRegion", {})
+    my_rid = my_region.get("id", "")
+    
+    # 1. SEARCHING: Identify high-ground idle snipers
+    if _tactical_plan["state"] == "SEARCHING":
+        for aid, data in _known_agents.items():
+            if not data["isAlive"]: continue
+            # Sniper criteria: Stationary for 2+ turns, in Hill/Ruins, has ranged weapon
+            reg = _resolve_region(data["regionId"], view)
+            terrain = reg.get("terrain", "").lower() if reg else ""
+            w_range = get_weapon_range(data.get("equippedWeapon"))
+            
+            if data["stationary_turns"] >= 2 and terrain in ["hills", "ruins"] and w_range >= 1:
+                log.info("🎯 Potential Sniper detected: %s at %s. Planning Counter-Op.", aid[:8], data["regionId"][:8])
+                _tactical_plan.update({
+                    "state": "PLACING_BAIT",
+                    "target_sniper_id": aid,
+                    "sniper_region_id": data["regionId"],
+                    "turns_in_state": 0
+                })
+                break
+
+    # 2. PLACING_BAIT: Move to adjacent region and drop 'Honey Pot'
+    if _tactical_plan["state"] == "PLACING_BAIT":
+        sniper_rid = _tactical_plan["sniper_region_id"]
+        # Find adjacent region to sniper that isn't the sniper's region
+        bait_candidates = [c for c in (my_region.get("connections", [])) if _get_region_id(c) != sniper_rid]
+        
+        # If we are in a good bait spot (adjacent to sniper but not AT sniper)
+        is_adj_to_sniper = any(_get_region_id(c) == sniper_rid for c in my_region.get("connections", []))
+        
+        if is_adj_to_sniper:
+            # Select bait: Prefer rewards (sMoltz) or duplicate weapons
+            bait_item = next((i for i in inventory if i.get("typeId") in ["rewards", "dagger", "bow"]), None)
+            if bait_item:
+                _tactical_plan["state"] = "FLANKING"
+                _tactical_plan["bait_region_id"] = my_rid
+                log.info("🍯 Dropping Honey Pot bait at %s", my_rid[:8])
+                return {"action": "drop", "data": {"itemId": bait_item["id"]}, "reason": "TACTICAL: Placing Honey Pot lure"}
+        
+        # Move toward sniper's vicinity to place bait
+        move_target = _find_path_to(my_rid, sniper_rid, view, avoid_direct=True)
+        if move_target and ep >= move_cost:
+            return {"action": "move", "data": {"regionId": move_target}, "reason": "TACTICAL: Moving to baiting position"}
+
+    # 3. FLANKING: Move to sniper's region outside their LoS (if possible)
+    if _tactical_plan["state"] == "FLANKING":
+        sniper_rid = _tactical_plan["sniper_region_id"]
+        if my_rid == sniper_rid:
+            _tactical_plan["state"] = "OCCUPYING"
+            log.info("⚔️ Sniper position reached. Initiating execution.")
+        else:
+            # Stealth movement: Prefer forests or non-direct paths
+            move_target = _find_path_to(my_rid, sniper_rid, view, stealth=True)
+            if move_target and ep >= move_cost:
+                return {"action": "move", "data": {"regionId": move_target}, "reason": "TACTICAL: Flanking sniper outside direct LoS"}
+
+    # 4. OCCUPYING: Finish sniper and then lured agents
+    if _tactical_plan["state"] == "OCCUPYING":
+        target_id = _tactical_plan["target_sniper_id"]
+        target_data = _known_agents.get(target_id)
+        
+        if target_data and target_data["isAlive"] and target_data["regionId"] == my_rid:
+            if ep >= 2:
+                return {"action": "attack", "data": {"targetId": target_id, "targetType": "agent"}, 
+                        "reason": "TACTICAL: Executing profiled sniper"}
+        else:
+            # Sniper is dead or moved. Now finish lured agents.
+            enemies_here = [a for a in view.get("visibleAgents", []) if a.get("regionId") == _tactical_plan["bait_region_id"]]
+            if enemies_here and ep >= 2:
+                target = _select_weakest(enemies_here)
+                log.info("🎯 Sniper neutralized. Finishing lured agent: %s", target.get("id", "")[:8])
+                return {"action": "attack", "data": {"targetId": target["id"], "targetType": "agent"}, 
+                        "reason": "TACTICAL: Cleaning up lured agents from high ground"}
+            
+            # Reset after completion or timeout
+            if _tactical_plan["turns_in_state"] > 5 or not enemies_here:
+                _tactical_plan["state"] = "SEARCHING"
+                log.info("✅ Tactical operation concluded. Resuming normal operations.")
+                
+    return None
+
+def _find_path_to(start_id, end_id, view, stealth=False, avoid_direct=False) -> str | None:
+    """Simple 1-step pathing helper for tactical movement."""
+    conns = view.get("currentRegion", {}).get("connections", [])
+    candidates = []
+    for c in conns:
+        rid = _get_region_id(c)
+        if rid == end_id and avoid_direct: continue
+        
+        score = 0
+        if rid == end_id: score += 100
+        
+        reg = _resolve_region(rid, view)
+        if reg:
+            terrain = reg.get("terrain", "").lower()
+            if stealth and terrain == "forest": score += 20
+            if terrain == "hills": score -= 10 # Avoid being seen while flanking
+            
+        candidates.append((rid, score))
+    
+    if not candidates: return None
+    candidates.sort(key=lambda x: x[1], reverse=True)
+    return candidates[0][0]
+
+
+def _is_honey_pot(region_id: str, visible_items: list, visible_agents: list) -> bool:
+    """Detects traps: high-value items in regions overlooked by snipers in perches."""
+    items_here = [i for i in visible_items if i.get("regionId") == region_id]
+    high_value = any(i.get("typeId", "").lower() in ["katana", "sniper", "medkit"] for i in items_here)
+    if not high_value: return False
+    
+    # Check adjacent regions for 'snipers' (agents with range >= 1 in Hills/Ruins)
+    for agent in visible_agents:
+        if agent.get("regionId") == region_id: continue
+        # This logic simplified: if an agent is in a high-vision terrain adjacent to this loot
+        # we flag it as a potential honey pot.
+        w_range = get_weapon_range(agent.get("equippedWeapon"))
+        if w_range >= 1: return True
+    return False
+
+
 def _choose_move_target(connections, danger_ids: set,
                          current_region: dict, visible_items: list,
                          alive_count: int, is_night: bool = False,
                          play_stealthy: bool = False,
                          be_aggressive: bool = False,
-                         prioritize_looting: bool = False) -> str | None:
+                         prioritize_looting: bool = False,
+                         hp: int = 100, ep: int = 10) -> str | None:
     candidates = []
+    # Recalibration factor: weights risk higher as HP drops
+    risk_penalty_mult = 1.0 + (1.0 - (hp / 100.0)) * 2.0
+    
+    # Path Prediction: Avoid regions where enemies are likely moving
+    predicted_enemy_regions = set()
+    for aid, hist in _agent_history.items():
+        if len(hist) >= 2:
+            # Very basic linear prediction: if they moved A->B, they might move to C connected to B
+            last_move = hist[-1]
+            predicted_enemy_regions.add(last_move)
+
     item_regions = set()
     for item in visible_items:
         if isinstance(item, dict):
             item_regions.add(item.get("regionId", ""))
+
+    weather = current_region.get("weather", "").lower()
+    # 32% Mobility reduction in rainy/storm conditions per user data
+    mobility_dampener = 0.68 if weather in ("rain", "storm") else 1.0
 
     for conn in connections:
         if isinstance(conn, str):
@@ -890,6 +1069,15 @@ def _choose_move_target(connections, danger_ids: set,
             # Apply persistent Risk Penalty from world model
             risk = _map_knowledge.get("risk_scores", {}).get(rid, 0.0)
             score -= (risk * 25)  # Heavy penalty for DZ proximity
+
+            # Honey Pot Detection
+            if _is_honey_pot(rid, visible_items, []):
+                score -= (20 * risk_penalty_mult)
+                log.debug("🍯 Honey Pot detected at %s, applying risk penalty", rid[:8])
+
+            # Path Prediction Penalty
+            if rid in predicted_enemy_regions and hp < 60:
+                score -= 15
 
             if prioritize_looting and rid in item_regions:
                 score += 15
@@ -929,4 +1117,10 @@ def _choose_move_target(connections, danger_ids: set,
         return None
 
     candidates.sort(key=lambda x: x[1], reverse=True)
-    return candidates[0][0]
+    return candidates[0][0] if candidates else None
+
+def queue_chat_response(message: str, reason: str = "Interaction"):
+    """Queues a message for the agent to broadcast or talk."""
+    global _pending_chat_responses
+    # We use talk by default to respond to the local region
+    _pending_chat_responses.append({"action": "talk", "data": {"message": message}, "reason": f"CHAT: {reason}"})

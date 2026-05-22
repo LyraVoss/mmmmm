@@ -78,6 +78,7 @@ function render() {
   try { renderAgentsTable(); } catch(e) {}
   try { renderDataTable(); } catch(e) {}
   try { renderLogs(); } catch(e) {}
+  try { renderMap(); } catch(e) {}
   try { renderMemory(); } catch(e) {}
 }
 
@@ -149,13 +150,27 @@ function renderAgentCards() {
   const needRebuild = existingCards.length !== agents.length;
 
   if (needRebuild) {
-    container.innerHTML = agents.map(([id]) => `<div class="card agent-card" data-aid="${id}"></div>`).join('');
+    container.innerHTML = agents.map(([id]) => `
+      <div class="card agent-card" data-aid="${id}">
+        <div class="agent-display-area"></div>
+        <div class="agent-command-bar" style="margin-top:16px; padding-top:12px; border-top:1px solid var(--border)">
+          <div style="display:flex; gap:8px">
+            <input type="text" id="cmd-${id}" placeholder="Send message or /command (e.g. /moltbook_key)..." 
+                   style="flex:1; background:var(--surface2); border:1px solid var(--border); color:var(--text); padding:8px 12px; border-radius:4px; font-size:12px;"
+                   onkeydown="if(event.key==='Enter') sendChat('${id}')">
+            <button onclick="sendChat('${id}')" 
+                    style="background:var(--cyan); color:#000; border:none; padding:0 16px; border-radius:4px; font-size:11px; cursor:pointer; font-weight:bold; text-transform:uppercase;">
+              Send
+            </button>
+          </div>
+        </div>
+      </div>`).join('');
   }
 
   agents.forEach(([id, a]) => {
-    let card = container.querySelector(`[data-aid="${id}"]`);
-    if (!card) return;
-    patchAgentCard(card, id, a);
+    let display = container.querySelector(`[data-aid="${id}"] .agent-display-area`);
+    if (!display) return;
+    patchAgentCard(display, id, a);
   });
 }
 
@@ -174,9 +189,63 @@ function patchAgentCard(card, id, a) {
   const region = a.region || '—';
   const roomId = a.room_id || '—';
 
+  const tactical = a.tactical || {};
+  const riskFactor = a.risk_factor || 1.0;
+  const weather = a.weather_info || {};
+
   const inv = (a.inventory||[]).map(i => itemTag(i)).join('') || '<span style="color:var(--text2)">Empty</span>';
-  const enemies = (a.enemies||[]).map(e => `<span class="item-tag" style="border-left:2px solid var(--red)">${esc(e.name||'?')} HP:${e.hp}</span>`).join('') || '<span style="color:var(--text2)">None</span>';
+  const enemies = (a.enemies||[]).map(e => {
+    const sniperIcon = e.is_sniper ? '🎯 ' : '';
+    const idleText = e.stationary > 0 ? ` [Idle:${e.stationary}]` : '';
+    const borderColor = e.is_sniper ? 'var(--amber)' : 'var(--red)';
+    return `<span class="item-tag" style="border-left:2px solid ${borderColor}">${sniperIcon}${esc(e.name||'?')} HP:${e.hp}${idleText}</span>`;
+  }).join('') || '<span style="color:var(--text2)">None</span>';
+
   const items = (a.region_items||[]).map(i => itemTag(i)).join('') || '<span style="color:var(--text2)">None</span>';
+
+  // Tactical Intel Row
+  const tacticalHtml = `
+    <div class="tactical-row" style="background:rgba(0,210,255,0.05); border:1px solid rgba(0,210,255,0.1); padding:8px; border-radius:6px; margin:10px 0; font-size:11px;">
+      <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+        <span style="color:var(--cyan); font-weight:800;">🛰️ TACTICAL: ${tactical.state || 'SEARCHING'}</span>
+        <span style="color:var(--text2)">Risk Weight: <span style="color:var(--amber)">${riskFactor}x</span></span>
+      </div>
+      <div style="color:var(--text2); font-size:10px;">
+        Target Sniper: <span style="color:var(--text)">${tactical.target_sniper_id ? tactical.target_sniper_id.slice(0,8) : 'None'}</span> | 
+        Env: <span style="color:var(--text)">${esc(a.terrain || 'plains')} / ${esc(weather.type || 'clear')} (-${Math.round((weather.penalty||0)*100)}% DMG)</span>
+      </div>
+    </div>`;
+
+  // Self-Evolution (IED) Panel
+  const evo = a.evolution || {};
+  const proposals = (evo.proposals || []).map(p => `
+    <div style="font-size:10px; border:1px solid ${p.status==='applied'?'var(--green)':'var(--border)'}; padding:6px; border-radius:4px; margin-top:4px; background:rgba(255,255,255,0.02)">
+      <div style="color:var(--cyan); font-weight:800">PROPOSAL #${p.id}: ${p.file}</div>
+      <div style="color:var(--text2); margin:2px 0">${p.reason}</div>
+      <code style="display:block; background:#000; padding:4px; color:var(--green); font-family:monospace">${esc(p.diff)}</code>
+      ${p.status === 'pending' ? `<button style="margin-top:4px; font-size:9px; background:var(--green); border:none; border-radius:2px; cursor:pointer">APPROVE EVOLUTION</button>` : '<div style="color:var(--green); font-size:9px; margin-top:4px">✓ APPLIED</div>'}
+    </div>
+  `).join('');
+
+  const evoHtml = `
+    <div class="evo-panel" style="margin-top:15px; border-top:1px dashed var(--border); padding-top:10px;">
+      <div style="display:flex; justify-content:space-between; align-items:center">
+        <h4 style="font-size:10px; text-transform:uppercase; color:var(--cyan); margin:0">🧬 Self-Evolution Chamber</h4>
+        <span style="font-size:9px; color:var(--green)">${evo.security_lock || ''}</span>
+      </div>
+      ${proposals || '<div style="font-size:10px; color:var(--text2); margin-top:4px">No active evolution proposals...</div>'}
+    </div>`;
+
+  // Viewer Suggestion Box
+  let suggestionHtml = '';
+  if (a.latest_suggestion) {
+    suggestionHtml = `
+      <div style="margin-top:10px; border:1px dashed var(--cyan); padding:8px; border-radius:6px; background:rgba(0,210,255,0.02)">
+        <div style="font-size:9px; color:var(--cyan); font-weight:800; margin-bottom:2px">📥 BACKEND FEEDBACK QUEUED</div>
+        <div style="font-size:10px; color:var(--text)">"${esc(a.latest_suggestion.text)}"</div>
+        <div style="font-size:9px; color:var(--text2); text-align:right">— ${esc(a.latest_suggestion.sender)}</div>
+      </div>`;
+  }
 
   // Status indicator: dot for playing/idle, skull for dead, no dot for error
   let statusIcon;
@@ -203,6 +272,9 @@ function patchAgentCard(card, id, a) {
         <div class="bar-track"><div class="bar-fill ep" style="width:${epPct}%"></div></div>
       </div>
     </div>
+    ${tacticalHtml}
+    ${evoHtml}
+    ${suggestionHtml}
     <div class="combat-row">
       <div class="combat-stat"><div class="cv">${atk+wpnBonus}</div><div class="cl">⚔️ ATK (${atk}+${wpnBonus})</div></div>
       <div class="combat-stat"><div class="cv">${def}</div><div class="cl">🛡️ DEF</div></div>
@@ -290,6 +362,32 @@ function switchLogTab(tab, elem) {
   renderLogs();
 }
 
+// ─── Map Visualization ───
+function renderMap() {
+  const frame = $('stream-frame');
+  if (!frame || currentPage !== 'dashboard') return;
+  
+  const agents = Object.values(S.agents || {});
+  if (!agents.length) return;
+
+  const agent = agents[0]; // Draw for first agent
+  const gameId = agent.game_id || (agent.room_id !== '—' ? agent.room_id : null);
+  
+  if (!gameId) {
+    if (frame.src !== 'about:blank') frame.src = 'about:blank';
+    return;
+  }
+
+  // Pattern for the public watch link
+  const targetUrl = `https://www.moltyroyale.com/watch/${gameId}`;
+  
+  // Only update src if it changed to avoid iframe flickering/reloading
+  if (!frame.src.includes(gameId)) {
+    frame.src = targetUrl;
+    console.log("📺 Switching stream to game:", gameId);
+  }
+}
+
 // ─── Account Form ───
 function saveAccount() {
   const acc = {
@@ -320,6 +418,14 @@ function importData(e) {
       .then(() => alert('Imported!')).catch(err => alert('Error'));
   };
   r.readAsText(f);
+}
+
+function sendChat(agentId) {
+  const input = $('cmd-' + agentId);
+  const text = input.value.trim();
+  if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({ type: 'send_chat', agent_id: agentId, text: text }));
+  input.value = '';
 }
 
 // ─── Memory Page ───

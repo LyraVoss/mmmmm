@@ -23,7 +23,8 @@ import random
 from bot.config import WS_URL, SKILL_VERSION
 from bot.credentials import get_api_key
 from bot.game.action_sender import ActionSender, COOLDOWN_ACTIONS, FREE_ACTIONS
-from bot.strategy.brain import decide_action, reset_game_state, learn_from_map, mark_item_picked_up
+from bot.utils.evolution_manager import EvolutionManager
+from bot.strategy.brain import decide_action, reset_game_state, learn_from_map, mark_item_picked_up, queue_chat_response
 from bot.dashboard.state import dashboard_state
 from bot.utils.rate_limiter import ws_limiter
 from bot.utils.logger import get_logger
@@ -94,7 +95,9 @@ class WebSocketEngine:
         self._last_action_type = None
         self._last_action_item_id = None
         self._last_kills = None
+        self._processed_msg_ids = set()
         self.moltbook_api_key = None  # Storage for custom MoltBook key
+        self.evolver = EvolutionManager(os.getcwd())
 
     async def run(self) -> dict:
         """Main gameplay loop. Returns game result dict."""
@@ -235,6 +238,10 @@ class WebSocketEngine:
         # ── game_ended ────────────────────────────────────────────────
         elif msg_type == "game_ended":
             log.info("═══ GAME ENDED ═══")
+            # Trigger Self-Evolution analysis on game end
+            stats = msg.get("data", {}).get("stats", {})
+            asyncio.create_task(self.evolver.analyze_performance(stats))
+            
             reset_game_state()
             self.game_result = msg
             return msg
@@ -262,6 +269,50 @@ class WebSocketEngine:
 
         return None
 
+    async def _process_viewer_intelligence(self, view: dict):
+        """Parses chat for suggestions and advice, filtering for malice."""
+        messages = view.get("recentMessages", [])
+        for m in messages:
+            mid = m.get("id")
+            if mid in self._processed_msg_ids: continue
+            self._processed_msg_ids.add(mid)
+
+            sender = m.get("senderName", "Viewer")
+            content = m.get("message", "")
+            content_lower = content.lower()
+
+            # Look for suggestions/advice keywords
+            keywords = ["should", "try", "advice", "suggest", "why dont you", "better if"]
+            if any(k in content_lower for k in keywords):
+                log.info("🧠 Suggestion detected from %s: %s", sender, content)
+                
+                # ── SIMULATED BACKEND GEMINI EVALUATION ──
+                # 1. Malice Check: Is someone telling us to die?
+                is_malicious = any(bad in content_lower for bad in ["die", "kill yourself", "enter deathzone", "drop everything"])
+                # 2. Fake Advice Check: Does the suggestion contradict basic survival?
+                is_fake_advice = "rest" in content_lower and view.get("self", {}).get("hp", 0) < 20
+
+                if is_malicious:
+                    dashboard_state.add_log(f"Blocked malicious suggestion from {sender}", "error", self.dashboard_key)
+                    queue_chat_response(f"I'm all about positive vibes, {sender}! ✨ Let's keep the advice helpful! 🌈", "Rejecting Malice")
+                elif is_fake_advice:
+                    queue_chat_response(f"That's a silly idea, {sender}! My sensors say resting now is way too risky! 🙅‍♀️💖", "Rejecting Fake Advice")
+                else:
+                    # Valid Suggestion: Log for the Developer (Gemini Code Assist)
+                    log.warning("📝 VALID SUGGESTION LOGGED FOR BACKEND: %s", content)
+                    dashboard_state.add_log(f"Suggestion logged for Gemini Backend: {content}", "success", self.dashboard_key)
+                    
+                    # Update dashboard telemetry for you to see
+                    dashboard_state.update_agent(self.dashboard_key, {"latest_suggestion": {"sender": sender, "text": content}})
+                    
+                    # Acknowledge to viewer
+                    queue_chat_response(f"Ooh, interesting idea, {sender}! I'll pass that to my Gemini Backend Assistant for a code review! 🤖✨", "Acknowledge Suggestion")
+
+        # Cleanup old message IDs to prevent memory leak
+        if len(self._processed_msg_ids) > 100:
+            # Keep the 20 most recent
+            self._processed_msg_ids = set(list(self._processed_msg_ids)[-20:])
+
     async def _on_agent_view(self, view: dict):
         """Process agent_view → decide action → send if appropriate."""
         if not isinstance(view, dict):
@@ -272,6 +323,8 @@ class WebSocketEngine:
             return
 
         alive_count = view.get("aliveCount", "?")
+        
+        await self._process_viewer_intelligence(view)
 
         if not self_data.get("isAlive", True):
             log.info("☠️ Agent DEAD — Alive remaining: %s. Waiting for game_ended...", alive_count)
@@ -279,6 +332,7 @@ class WebSocketEngine:
             dashboard_state.update_agent(dk, {
                 "name": self.dashboard_name,
                 "status": "dead",
+                "game_id": self.game_id,
                 "hp": 0,
                 "ep": 0,
                 "maxHp": self_data.get("maxHp", 100),
@@ -293,6 +347,7 @@ class WebSocketEngine:
                 "warning", dk
             )
             return
+                # DO NOT RETURN: Continue processing to allow `decide_action` to return None and wait for game_ended.
 
         # ── Check for Manual User Messages (Dashboard Input) ──
         user_msg = dashboard_state.pop_user_message(self.dashboard_key)
@@ -371,10 +426,20 @@ class WebSocketEngine:
                     or i.get("type") or "")
 
         dk = self.dashboard_key
+        from bot.strategy.brain import _tactical_plan, _known_agents, WEATHER_COMBAT_PENALTY
+        
+        tactical_status = f" | Tactical: {_tactical_plan['state']}"
+        
+        # Deeper data mapping for dashboard telemetry
+        risk_factor = round(1.0 + (1.0 - (hp / 100.0)) * 2.5, 2) if isinstance(hp, int) else 1.0
+        weather_penalty = WEATHER_COMBAT_PENALTY.get(region_weather, 0.0)
+
         dashboard_state.update_agent(dk, {
             "name": self.dashboard_name,
             "hp": hp, "ep": ep,
+            "game_id": self.game_id,
             "status": "playing",
+            "last_action": f"{self._last_action_type}{tactical_status}",
             "maxHp": self_data.get("maxHp", 100),
             "maxEp": self_data.get("maxEp", 10),
             "atk": self_data.get("atk", 0),
@@ -383,11 +448,26 @@ class WebSocketEngine:
             "weapon_bonus": weapon_bonus,
             "kills": self_data.get("kills", 0),
             "region": region_name,
+            "region_id": region_id,
+            "visible_regions": view.get("visibleRegions", []),
             "alive_count": alive_count,
+            "terrain": region_terrain,
+            "weather_info": {"type": region_weather, "penalty": weather_penalty},
+            "risk_factor": risk_factor,
+            "tactical": _tactical_plan.copy(),
+            "evolution": self.evolver.get_status(),
             "inventory": [{"typeId": i.get("typeId","?"), "name": _item_label(i), "cat": _item_cat(i)}
                           for i in inv if isinstance(i, dict)],
-            "enemies": [{"name": e.get("name","?"), "hp": e.get("hp","?"), "id": e.get("id","")}
-                        for e in enemies[:8]],
+            "enemies": [
+                {
+                    "name": e.get("name","?"), 
+                    "hp": e.get("hp","?"), 
+                    "id": e.get("id",""),
+                    "stationary": _known_agents.get(e.get("id", ""), {}).get("stationary_turns", 0),
+                    "is_sniper": _known_agents.get(e.get("id", ""), {}).get("stationary_turns", 0) >= 2
+                }
+                for e in enemies[:8]
+            ],
             "region_items": [{"typeId": i.get("typeId","?"), "name": _item_label(i), "cat": _item_cat(i)}
                              for i in region_items[:10]],
         })

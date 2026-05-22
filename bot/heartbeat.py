@@ -218,6 +218,7 @@ class Heartbeat:
         dashboard_state.update_agent(self._agent_key, {
             "status": "playing",
             "room_id": game_id,
+            "game_id": game_id,
             "room_name": entry_type + " room",
         })
         dashboard_state.add_log(f"Joined {entry_type} game: {game_id[:12]}", "info", self._agent_key)
