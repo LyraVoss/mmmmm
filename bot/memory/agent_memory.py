@@ -62,29 +62,27 @@ class AgentMemory:
                 log.warning("MongoDB init failed: %s", e)
 
     async def load(self):
-        """Load memory from disk + Railway Variables (v1.6.0)."""
+        """Load memory: MongoDB is primary. Local disk is secondary/backup."""
         MEMORY_DIR.mkdir(parents=True, exist_ok=True)
-        if MEMORY_FILE.exists():
-            try:
-                raw = MEMORY_FILE.read_text(encoding="utf-8")
-                self.data = json.loads(raw)
-                self._loaded = True
-                log.info("Memory loaded: %d games, %d lessons",
-                         self.data["overall"]["history"]["totalGames"],
-                         len(self.data["overall"]["history"]["lessons"]))
-            except (json.JSONDecodeError, KeyError) as e:
-                log.warning("Memory file corrupt, using defaults: %s", e)
-                self.data = dict(DEFAULT_MEMORY)
-        else:
-            log.info("No memory file — starting fresh")
 
-        # Priority 1: MongoDB (Survives everything)
+        # HARDCODED PRIORITY: Check MongoDB first to prevent "Starting fresh" logs on redeploy
         if self._collection is not None:
-            await self.load_from_mongodb()
-            return
+            db_loaded = await self.load_from_mongodb()
+            if db_loaded:
+                self._loaded = True
+                return
 
-        # v1.6.0: restore lessons dari Railway Variables (survive redeploy!)
-        await self.load_from_railway()
+        # Fallback to local file if MongoDB is empty or not configured
+        if MEMORY_FILE.exists():
+            raw = MEMORY_FILE.read_text(encoding="utf-8")
+            self.data = json.loads(raw)
+            self._loaded = True
+            log.info("Memory loaded from local disk backup")
+        else:
+            log.info("No memory found in DB or Disk — initializing fresh brain")
+
+        # HARDCODE: Railway Variable loading is disabled to prevent sync conflicts
+        # await self.load_from_railway()
 
     async def save(self):
         """Persist memory to disk AND sync to Railway Variables (v1.6.0)."""
@@ -100,8 +98,8 @@ class AgentMemory:
             encoding="utf-8",
         )
         log.debug("Memory saved to %s", MEMORY_FILE)
-        # FIX v1.7.2: sync_to_railway triggers a full service redeploy on Railway.
-        # Use MONGODB_URI for persistence without redeploys. 
+        # HARDCODE: sync_to_railway is disabled. It causes infinite redeploy loops.
+        # MongoDB is now the sole source of persistent memory.
         # await self.sync_to_railway()
 
     def set_agent_name(self, name: str):
@@ -182,7 +180,7 @@ class AgentMemory:
         except Exception as e:
             log.warning("MongoDB sync failed: %s", e)
 
-    async def load_from_mongodb(self):
+    async def load_from_mongodb(self) -> bool:
         """Restore the agent's brain from the MongoDB cluster."""
         if self._collection is None:
             return
@@ -195,6 +193,8 @@ class AgentMemory:
             # Ensure lessons are merged and deduplicated if both local and DB have them
             self.data["overall"]["history"]["lessons"] = list(dict.fromkeys(self.data["overall"]["history"]["lessons"] + doc["overall"]["history"].get("lessons", [])))[-MAX_LESSONS_TO_REMEMBER:]
             log.info("✅ Brain restored from MongoDB cluster")
+            return True
+        return False
 
     # ── Railway Variables persistent memory (v1.6.0) ─────────────────
 
