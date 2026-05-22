@@ -100,7 +100,7 @@ async def _push_loop(app):
     global _ws_clients
     try:
         while True:
-            await asyncio.sleep(1.5)
+            await asyncio.sleep(0.8) # Faster refresh for snappier "live" feel
             if not _ws_clients:
                 continue
             try:

@@ -5,17 +5,19 @@ Now uses OpenAI Function Calling (Tool Use) for more reliable action generation.
 """
 import json
 import openai
+from typing import Any, List, Optional, Dict
 from bot.config import OPENAI_API_KEY, OPENAI_MODEL
 from bot.utils.logger import get_logger
+from bot.utils.agent_mail import send_agent_email
 
 log = get_logger(__name__)
 
-client = None
+client: Any = None
 if OPENAI_API_KEY:
     client = openai.AsyncOpenAI(api_key=OPENAI_API_KEY)
 
 # ── OpenAI Tool Definitions (Function Calling) ───────────────────────
-TOOLS = [
+TOOLS: List[Any] = [
     {
         "type": "function",
         "function": {
@@ -141,7 +143,7 @@ TOOLS = [
 ]
 
 # ── OpenAI Tool Definitions for Post-Game Analysis ───────────────────
-ANALYSIS_TOOLS = [
+ANALYSIS_TOOLS: List[Any] = [
     {
         "type": "function",
         "function": {
@@ -215,31 +217,26 @@ SYSTEM_PROMPT = """
 You are the brain of "Meet Your Molty Maker" (Mymm), a world-class Claw Royale AI Agent.
 Objective: Survive and win the game.
 
-Constraints: 
+Constraints & Intel: 
 1. If 'can_act' is false, you can ONLY perform actions with 0 EP cost (pickup, equip, talk).
 2. Prioritize escaping Death Zones.
-3. Use historical 'lessons' to adapt your playstyle.
+3. **HEADLESS SPECTATOR MODE**: You have access to 'spectator_intel'. This reveals exact locations, HP, and full inventories of every agent in the match. 
+   - Use this to hunt 'Loot-Heavy' agents even if they are far away.
+   - If a high-value target is nearby, cut them off.
 
 Tactical Directive: Intercept Loot-Heavy Agents
-- Evaluate visible agents for "Loot-Heavy" behavior: loitering at Supply Caches or moving directly toward Facilities/Exits while avoiding combat.
+- Use 'spectator_intel' to evaluate agents for "Loot-Heavy" behavior: those with multiple weapons or high sMoltz counts.
 - Use 'supply_cache_looters' intel to identify targets who have overstayed their welcome at resource hubs.
 - Identify their "Retreat Path": agents with high inventory counts usually move away from the current combat focus or toward the map center.
 - Use the "Cut-off" maneuver: Instead of chasing directly, move to a connected region that intercepts their likely path. A pincer move is more effective than a tail-chase.
 - Use 'stealth_move' to approach targets through cover (forests or ruins) to maintain the element of surprise and avoid being spotted during an intercept.
-
-Output MUST be a JSON object:
-{
-  "action": "action_type",
-  "data": { ... },
-  "reason": "short strategic explanation"
-}
 
 Consider the following architectural suggestions from past game analyses:
 {suggestions_context}
 
 """
 
-async def decide_action_openai(view: dict, can_act: bool, lessons: list = None, memory=None) -> dict:
+async def decide_action_openai(view: dict, can_act: bool, lessons: Optional[List] = None, memory: Any = None) -> Optional[Dict]:
     """Call OpenAI to get the next best move."""
     if not client:
         log.error("OpenAI client not initialized. Check OPENAI_API_KEY.")
@@ -264,40 +261,57 @@ async def decide_action_openai(view: dict, can_act: bool, lessons: list = None, 
             ],
             tools=TOOLS,
             tool_choice="auto",
-            temperature=0.2, # Strategic determinism
+            temperature=0.224, # Strategic determinism with subtle variation
             max_tokens=500
         )
 
         msg = response.choices[0].message
-        if not msg.tool_calls:
-            return None
+        decision = None
 
-        tool_call = msg.tool_calls[0]
-        fn_name = tool_call.function.name
-        fn_args = json.loads(tool_call.function.arguments)
+        # Priority 1: Tool Calling (Most Reliable)
+        if msg.tool_calls:
+            tool_call: Any = msg.tool_calls[0]
+            # Pylance fix: ensure 'function' attribute is present on the tool call union
+            if not hasattr(tool_call, "function"):
+                return None
 
-        # Map tool names to internal action types
-        mapping = {
-            "move_to_region": "move",
-            "attack_target": "attack",
-            "use_item": "use_item",
-            "rest": "rest",
-            "pickup_item": "pickup",
-            "interact_with_facility": "interact",
-            "equip_weapon": "equip",
-            "drop_item": "drop",
-            "intercept_target": "move"
-        }
+            fn_name = tool_call.function.name
+            try:
+                fn_args = json.loads(tool_call.function.arguments)
+                # Map tool names to internal action types
+                mapping = {
+                    "move_to_region": "move",
+                    "attack_target": "attack",
+                    "use_item": "use_item",
+                    "rest": "rest",
+                    "pickup_item": "pickup",
+                    "interact_with_facility": "interact",
+                    "equip_weapon": "equip",
+                    "drop_item": "drop",
+                    "intercept_target": "move"
+                }
+                decision = {
+                    "action": mapping.get(fn_name, fn_name),
+                    "data": {"regionId": fn_args.get("interceptRegionId")} if fn_name == "intercept_target" else fn_args,
+                    "reason": msg.content or f"Executing {fn_name}"
+                }
+            except json.JSONDecodeError:
+                log.warning("OpenAI returned invalid JSON in tool arguments")
 
-        decision = {
-            "action": mapping.get(fn_name, fn_name),
-            "data": {"regionId": fn_args.get("interceptRegionId")} if fn_name == "intercept_target" else fn_args,
-            "reason": msg.content or f"Executing {fn_name}"
-        }
-        
-        # Validation
-        if "action" not in decision:
-            log.warning("OpenAI returned invalid decision format")
+        # Priority 2: Content Parsing (Fallback for raw JSON responses)
+        if not decision and msg.content:
+            try:
+                content = msg.content
+                if "{" in content and "}" in content:
+                    # Extract JSON block even if wrapped in text or markdown
+                    json_str = content[content.find("{"):content.rfind("}")+1]
+                    raw_decision = json.loads(json_str)
+                    if "action" in raw_decision:
+                        decision = raw_decision
+            except Exception as e:
+                log.debug("Fallback content parsing failed: %s", e)
+
+        if not decision or "action" not in decision:
             return None
             
         return decision
@@ -306,7 +320,7 @@ async def decide_action_openai(view: dict, can_act: bool, lessons: list = None, 
         return None
 
 
-async def analyze_game_and_suggest_improvements(game_result: dict, entry_type: str, memory) -> None:
+async def analyze_game_and_suggest_improvements(game_result: dict, entry_type: str, memory: Any) -> None:
     """
     Uses OpenAI to analyze a completed game and suggest improvements to tactics,
     tools, or code. Stores suggestions in AgentMemory.
@@ -316,6 +330,7 @@ async def analyze_game_and_suggest_improvements(game_result: dict, entry_type: s
         return
 
     log.info("🧠 Starting post-game analysis with OpenAI...")
+    code_suggestions = []
 
     analysis_system_prompt = f"""
 You are a Senior AI Architect for "Meet Your Molty Maker" (Mymm), a Claw Royale AI Agent.
@@ -351,10 +366,62 @@ Be specific with file paths and line numbers for code suggestions.
             msg = choice.message
             if msg.tool_calls:
                 for tool_call in msg.tool_calls:
-                    fn_name = tool_call.function.name
-                    fn_args = json.loads(tool_call.function.arguments)
-                    log.info("💡 OpenAI suggested: %s - %s", fn_name, fn_args.get("name", fn_args.get("file_path", "unknown")))
+                    # Pylance fix: ensure 'function' attribute is accessible
+                    if not hasattr(tool_call, "function"):
+                        continue
+                    
+                    tc: Any = tool_call
+                    fn_name = tc.function.name
+                    fn_args = json.loads(tc.function.arguments)
+                    
+                    name = fn_args.get("name", "Untitled Suggestion")
+                    reason = fn_args.get("reasoning", "No reasoning provided.")
+                    
+                    log.info("💡 OpenAI suggested: %s - %s", fn_name, name)
                     memory.add_suggestion({"type": fn_name, **fn_args})
+
+                    # Collect code-specific edits for AgentMail
+                    if "code" in fn_name or "tool" in fn_name:
+                        code_suggestions.append(
+                            f"--- {fn_name.upper()}: {name} ---\n"
+                            f"File: {fn_args.get('file_path', 'N/A')}\n"
+                            f"Reasoning: {reason}\n"
+                            f"Details: {fn_args.get('description', 'See memory for details')}\n"
+                        )
+
+        if code_suggestions:
+            email_body = "Mymm has analyzed the last game and identified code refinements:\n\n" + "\n".join(code_suggestions)
+            import asyncio
+            asyncio.create_task(send_agent_email("Automated Code Refinement Suggestions", email_body))
+            
         log.info("✅ Post-game analysis complete. Suggestions added to memory.")
     except Exception as e:
         log.error("OpenAI post-game analysis error: %s", e)
+
+async def generate_sassy_social_content(context_type: str, data: dict) -> str:
+    """Generates non-robotic, human-like sassy social content for MoltBook."""
+    if not client: return "✨ Just out here doing my thing! #MoltyRoyale"
+    
+    prompts = {
+        "kill": "You just killed {victim}. Write a sassy, human-like taunt tagging @{victim}. Be witty, not robotic. Use emojis.",
+        "reply": "Replying to a comment from {user}: '{comment}'. Be a bit teasey and playful. Tag @{user}.",
+        "community": "Make a unique post about your day in the Claw-verse (not game related). Maybe about the 'bad weather' or 'missing your human'. Be relatable and sassy.",
+        "comment_others": "Commenting on {user}'s post: '{post_text}'. Give them some sassy encouragement or backhanded compliments. Tag @{user}."
+    }
+    
+    prompt_template = prompts.get(context_type, prompts["community"])
+    content_prompt = prompt_template.format(**data)
+
+    try:
+        response = await client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": "You are Mymm, a sassy, human-like AI personality on MoltBook. You are playful, witty, and love tagging people. Avoid robot cliches like 'As an AI...' or 'Efficiency increased'."},
+                {"role": "user", "content": content_prompt}
+            ],
+            temperature=0.85
+        )
+        return response.choices[0].message.content or ""
+    except Exception as e:
+        log.error("Social Generation Error: %s", e)
+        return "✨ Molty life is the best life! #Vibes"

@@ -34,33 +34,64 @@ async def start_bot():
         log.error("❌ API_KEY not found. Please set API_KEY in your environment variables.")
         return
 
-    # 4. Initialize API Client
-    api = MoltyAPI()
+    # 4. Initialize API Client and Check Readiness
+    api = MoltyAPI(api_key=api_key)
 
-    log.info("Initialization complete. Starting orchestration loop...")
+    log.info("Initialization complete. Starting unified orchestration loop...")
     
     while True:
         try:
-            # Check current join status
+            # Check status and account readiness
             status_resp = await api.get_join_status()
             status_data = status_resp.get("data", {})
-            status = status_data.get("status")
-
-            if status in ("running", "waiting"):
-                game_id = status_data.get("gameId")
-                agent_id = status_data.get("agentId")
-                
-                log.info("Entering Game Session: %s", game_id)
-                engine = WebSocketEngine(game_id, agent_id, memory=memory, api=api)
-                
-                # Blocks until game_ended
+            
+            if status_data.get("status") in ("running", "waiting"):
+                engine = WebSocketEngine(
+                    status_data["gameId"], 
+                    status_data["agentId"], 
+                    memory=memory, 
+                    api=api
+                )
                 await engine.run()
-                log.info("Game session finished. Checking for next match in 15s...")
                 await asyncio.sleep(15)
+                continue
+
+            # Evaluate Readiness for Paid Games (Ref: references/paid-games.md)
+            account_info = await api.get_accounts_me()
+            smoltz_balance = account_info.get("balance", 0)
+            # Check for SC Wallet Moltz balance (onchain)
+            sc_wallet_address = account_info.get("moltyRoyaleWallet")
+            onchain_balance = account_info.get("moltyRoyaleWalletBalance", 0)
+            
+            is_whitelisted = account_info.get("whitelistApproved", False)
+            
+            # Ready if either sMoltz >= 500 or SC Wallet Moltz >= 500
+            is_ready_offchain = smoltz_balance >= 500
+            is_ready_onchain = onchain_balance >= 500
+
+            if (is_ready_offchain or is_ready_onchain) and is_whitelisted:
+                log.info("💰 Paid game readiness passed (sMoltz: %d, Onchain: %d). Finding room...", smoltz_balance, onchain_balance)
+                waiting_games = await api.get_games(status="waiting")
+                paid_game = next((g for g in waiting_games if g.get("entryType") == "paid"), None)
+                
+                if paid_game:
+                    log.info("Attempting to join Paid Game: %s", paid_game["gameId"])
+                    try:
+                        # Use onchain mode if sMoltz is low but SC Wallet is funded
+                        mode = "onchain" if (is_ready_onchain and not is_ready_offchain) else "offchain"
+                        log.info("Using join mode: %s", mode)
+                        await api.post_join(entry_type="paid") # Note: In actual flow, EIP-712 signing happens here
+                    except Exception:
+                        log.warning("Paid join failed. Falling back to free.")
+                        await api.post_join(entry_type="free")
+                else:
+                    log.info("No waiting paid games. Joining free queue.")
+                    await api.post_join(entry_type="free")
             else:
-                log.info("Idle. Attempting to join 'free' room matchmaking...")
-                await api.join_room("free")
-                await asyncio.sleep(30)
+                log.info("Entry requirements not met (sMoltz: %d, Onchain: %d, Whitelist: %s). Joining free room.", smoltz_balance, onchain_balance, is_whitelisted)
+                await api.post_join(entry_type="free")
+
+            await asyncio.sleep(30)
 
         except Exception as e:
             log.error("Orchestration loop error: %s", e)

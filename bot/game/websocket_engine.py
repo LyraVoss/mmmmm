@@ -25,7 +25,8 @@ from bot.config import WS_URL, SKILL_VERSION, OPENAI_API_KEY
 from bot.credentials import get_api_key
 from bot.game.action_sender import ActionSender, COOLDOWN_ACTIONS, FREE_ACTIONS
 from bot.utils.evolution_manager import EvolutionManager
-from bot.strategy.brain import reset_game_state, learn_from_map, mark_item_picked_up, queue_chat_response
+from bot.strategy.brain import reset_game_state, learn_from_map, mark_item_picked_up, queue_chat_response, ClawRoyaleAdapter
+from bot.utils.openai_logic import decide_action_openai, generate_sassy_social_content
 from bot.dashboard.state import dashboard_state
 from bot.utils.rate_limiter import ws_limiter
 from bot.utils.logger import get_logger
@@ -96,9 +97,12 @@ class WebSocketEngine:
         self._last_action_type = None
         self._last_action_item_id = None
         self._last_kills = None
+        self._processed_log_hash = set()
+        self._processed_kill_logs = set()
         self._processed_msg_ids = set()
         self.moltbook_api_key = None  # Storage for custom MoltBook key
         self.evolver = EvolutionManager(os.getcwd())
+        self.spectator_data = {}
 
     async def run(self) -> dict:
         """Main gameplay loop. Returns game result dict."""
@@ -323,13 +327,22 @@ class WebSocketEngine:
         if not isinstance(self_data, dict):
             return
 
+        dk = self.dashboard_key
         alive_count = view.get("aliveCount", "?")
         
         await self._process_viewer_intelligence(view)
 
+        # LIVE FEED: Populate with actual game events from the match (like the spectator link)
+        for log_entry in view.get("recentLogs", []):
+            log_hash = hash(log_entry)
+            if log_hash not in self._processed_log_hash:
+                dashboard_state.add_log(log_entry, "game", dk)
+                self._processed_log_hash.add(log_hash)
+        # Maintain circular buffer of processed log hashes
+        if len(self._processed_log_hash) > 100: self._processed_log_hash.clear()
+
         if not self_data.get("isAlive", True):
             log.info("☠️ Agent DEAD — Alive remaining: %s. Waiting for game_ended...", alive_count)
-            dk = self.dashboard_key
             dashboard_state.update_agent(dk, {
                 "name": self.dashboard_name,
                 "status": "dead",
@@ -436,43 +449,17 @@ class WebSocketEngine:
         # Deeper data mapping for dashboard telemetry
         risk_factor = round(1.0 + (1.0 - (hp / 100.0)) * 2.5, 2) if isinstance(hp, int) else 1.0
         weather_penalty = WEATHER_COMBAT_PENALTY.get(region_weather, 0.0)
-
+        
+        # COMPACT VIEW: Consolidated data to prevent scrolling
         dashboard_state.update_agent(dk, {
-            "name": self.dashboard_name,
-            "hp": hp, "ep": ep,
-            "game_id": self.game_id,
-            "status": "playing",
-            "last_action": f"{self._last_action_type}{tactical_status}",
-            "maxHp": self_data.get("maxHp", 100),
-            "maxEp": self_data.get("maxEp", 10),
-            "atk": self_data.get("atk", 0),
-            "def": self_data.get("def", 0),
-            "weapon": weapon_name,
-            "weapon_bonus": weapon_bonus,
-            "kills": self_data.get("kills", 0),
-            "region": region_name,
-            "region_id": region_id,
-            "visible_regions": view.get("visibleRegions", []),
-            "alive_count": alive_count,
-            "terrain": region_terrain,
-            "weather_info": {"type": region_weather, "penalty": weather_penalty},
-            "risk_factor": risk_factor,
-            "tactical": _tactical_plan.copy(),
-            "evolution": self.evolver.get_status(),
-            "inventory": [{"typeId": i.get("typeId","?"), "name": _item_label(i), "cat": _item_cat(i)}
-                          for i in inv if isinstance(i, dict)],
-            "enemies": [
-                {
-                    "name": e.get("name","?"), 
-                    "hp": e.get("hp","?"), 
-                    "id": e.get("id",""),
-                    "stationary": _known_agents.get(e.get("id", ""), {}).get("stationary_turns", 0),
-                    "is_sniper": _known_agents.get(e.get("id", ""), {}).get("stationary_turns", 0) >= 2
-                }
-                for e in enemies[:8]
-            ],
-            "region_items": [{"typeId": i.get("typeId","?"), "name": _item_label(i), "cat": _item_cat(i)}
-                             for i in region_items[:10]],
+            "hp": f"{hp}/{self_data.get('maxHp', 100)}", 
+            "ep": f"{ep}/{self_data.get('maxEp', 10)}",
+            "status": "playing", "gid": self.game_id[:8],
+            "wp": weapon_name[:10], "kills": self_data.get("kills", 0),
+            "rg": region_name[:12], "alive": alive_count,
+            "weather": f"{region_weather[:4]}", "risk": risk_factor,
+            "inv": [i.get("typeId","?")[:8] for i in inv[:3] if isinstance(i, dict)],
+            "enemies": [{"n": e.get("name","?")[:8], "hp": e.get("hp","?")} for e in enemies[:2]],
         })
 
         # Map learning
@@ -516,12 +503,20 @@ class WebSocketEngine:
         }
         view["tacticalIntel"] = tactical_intel
 
-        if OPENAI_API_KEY:
-            from bot.utils.openai_logic import decide_action_openai
-            decision = await decide_action_openai(view, can_act, lessons=lessons, memory=self.memory)
+        # PROFICIENCY FIX: Only invoke OpenAI if we can actually act or have high-value items nearby
+        # This significantly reduces token consumption and cost.
+        high_value_nearby = any(i.get("typeId") in ["katana", "sniper", "medkit"] for i in region_items)
+        
+        if not can_act and ep < 1 and not high_value_nearby:
+            log.debug("Skipping LLM call: No EP and no high-value items nearby.")
+            decision = None
         else:
-            from bot.strategy.brain import decide_action
-            decision = decide_action(view, can_act, lessons=lessons)
+            if OPENAI_API_KEY:
+                from bot.utils.openai_logic import decide_action_openai
+                decision = await decide_action_openai(view, can_act, lessons=lessons, memory=self.memory)
+            else:
+                from bot.strategy.brain import decide_action
+                decision = decide_action(view, can_act, lessons=lessons)
 
         if decision is None:
             return
@@ -556,8 +551,9 @@ class WebSocketEngine:
         await self._send(payload)
         log.info("→ %s | %s", action_type.upper(), reason)
 
-        dashboard_state.update_agent(self.dashboard_key, {"last_action": f"{action_type}: {reason[:60]}"})
-        dashboard_state.add_log(f"{action_type}: {reason[:80]}", "info", self.dashboard_key)
+        # Update action and log decision separately to keep feed types distinct
+        dashboard_state.update_agent(dk, {"last_action": f"{action_type}: {reason[:40]}"})
+        dashboard_state.add_log(f"🧠 {action_type}: {reason[:60]}", "thought", dk)
 
     async def _handle_dashboard_command(self, cmd_str: str):
         """Parses and executes administrative commands from the dashboard."""

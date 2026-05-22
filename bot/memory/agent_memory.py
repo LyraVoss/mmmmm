@@ -19,11 +19,6 @@ from bot.utils.logger import get_logger
 
 log = get_logger(__name__)
 
-# Railway API config — ambil dari env vars yang sudah ada
-RAILWAY_API_TOKEN = os.environ.get("RAILWAY_API_TOKEN", "")
-RAILWAY_SERVICE_ID = os.environ.get("RAILWAY_SERVICE_ID", "")
-RAILWAY_ENVIRONMENT_ID = os.environ.get("RAILWAY_ENVIRONMENT_ID", "")
-
 DEFAULT_MEMORY = {
     "overall": {
         "identity": {"name": "", "playstyle": "adaptive guardian hunter"},
@@ -72,7 +67,6 @@ class AgentMemory:
                 self._loaded = True
                 return
 
-        # Fallback to local file if MongoDB is empty or not configured
         if MEMORY_FILE.exists():
             raw = MEMORY_FILE.read_text(encoding="utf-8")
             self.data = json.loads(raw)
@@ -81,11 +75,8 @@ class AgentMemory:
         else:
             log.info("No memory found in DB or Disk — initializing fresh brain")
 
-        # HARDCODE: Railway Variable loading is disabled to prevent sync conflicts
-        # await self.load_from_railway()
-
     async def save(self):
-        """Persist memory to disk AND sync to Railway Variables (v1.6.0)."""
+        """Persist memory to MongoDB primary and local disk fallback."""
         MEMORY_DIR.mkdir(parents=True, exist_ok=True)
 
         # Priority 1: MongoDB Sync
@@ -183,7 +174,7 @@ class AgentMemory:
     async def load_from_mongodb(self) -> bool:
         """Restore the agent's brain from the MongoDB cluster."""
         if self._collection is None:
-            return
+            return False
         doc = await self._collection.find_one({"_id": "mymm_brain_v1"})
         if doc and "overall" in doc:
             # Deep merge overall data, prioritizing MongoDB for history/lessons/suggestions
@@ -195,90 +186,3 @@ class AgentMemory:
             log.info("✅ Brain restored from MongoDB cluster")
             return True
         return False
-
-    # ── Railway Variables persistent memory (v1.6.0) ─────────────────
-
-    async def sync_to_railway(self):
-        """
-        Simpan memory ke Railway Variables sebagai BOT_MEMORY.
-        Dipanggil setelah game selesai — data tidak hilang saat redeploy!
-        """
-        if not RAILWAY_API_TOKEN or not RAILWAY_SERVICE_ID or not RAILWAY_ENVIRONMENT_ID:
-            log.debug("Railway sync skipped — env vars not set")
-            return
-
-        try:
-            memory_json = json.dumps({
-                "totalGames": self.data["overall"]["history"]["totalGames"],
-                "wins": self.data["overall"]["history"]["wins"],
-                "avgKills": self.data["overall"]["history"]["avgKills"],
-                "lessons": self.data["overall"]["history"]["lessons"][-10:],  # 10 lessons terakhir
-            }, ensure_ascii=False)
-
-            query = """
-            mutation UpsertVariables($input: VariableCollectionUpsertInput!) {
-              variableCollectionUpsert(input: $input)
-            }
-            """
-            variables = {
-                "input": {
-                    "projectId": os.environ.get("RAILWAY_PROJECT_ID", ""),
-                    "environmentId": RAILWAY_ENVIRONMENT_ID,
-                    "serviceId": RAILWAY_SERVICE_ID,
-                    "variables": {
-                        "BOT_MEMORY": memory_json
-                    }
-                }
-            }
-
-            payload = json.dumps({"query": query, "variables": variables}).encode()
-            req = urllib.request.Request(
-                "https://backboard.railway.app/graphql/v2",
-                data=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {RAILWAY_API_TOKEN}",
-                    "User-Agent": "MoltyRoyale-Agent/1.0"
-                }
-            )
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                result = json.loads(resp.read())
-                if "errors" in result:
-                    log.warning("Railway sync error: %s", result["errors"])
-                else:
-                    log.info("✅ Memory synced to Railway Variables (%d lessons, %d games)",
-                             len(self.data["overall"]["history"]["lessons"]),
-                             self.data["overall"]["history"]["totalGames"])
-        except Exception as e:
-            log.warning("Railway sync failed (non-critical): %s", e)
-
-    async def load_from_railway(self):
-        """
-        Load memory dari Railway Variables BOT_MEMORY saat startup.
-        Restore lessons yang tersimpan dari game-game sebelumnya.
-        """
-        if not RAILWAY_API_TOKEN:
-            return
-
-        try:
-            bot_memory = os.environ.get("BOT_MEMORY", "")
-            if bot_memory:
-                saved = json.loads(bot_memory)
-                history = self.data["overall"]["history"]
-
-                # Restore data, tapi jangan overwrite kalau lokal lebih baru
-                if saved.get("totalGames", 0) > history.get("totalGames", 0):
-                    history["totalGames"] = saved["totalGames"]
-                    history["wins"] = saved.get("wins", 0)
-                    history["avgKills"] = saved.get("avgKills", 0.0)
-
-                # Merge lessons — gabungkan lokal + railway, hapus duplikat
-                saved_lessons = saved.get("lessons", [])
-                current_lessons = history.get("lessons", [])
-                merged = list(dict.fromkeys(saved_lessons + current_lessons))[-20:]
-                history["lessons"] = merged
-
-                log.info("✅ Memory restored from Railway: %d games, %d lessons",
-                         history["totalGames"], len(history["lessons"]))
-        except Exception as e:
-            log.warning("Railway memory load failed (non-critical): %s", e)

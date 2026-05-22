@@ -3,119 +3,70 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mymm Dashboard — Molty Royale</title>
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=JetBrains+Mono&display=swap">
+    <title>Mymm Command Center</title>
     <style>
-        :root {
-            --bg: #0b0e11; --surface: #15191c; --surface2: #1c2126;
-            --text: #e3e6e8; --text2: #9ba3ab; --border: #2d3439;
-            --cyan: #00d2ff; --green: #00ff88; --red: #ff4b4b; --amber: #ffb800;
-        }
-        * { box-sizing: border-box; }
-        body { margin: 0; font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); overflow-x: hidden; }
-        .nav { display: flex; gap: 20px; padding: 20px; background: var(--surface); border-bottom: 1px solid var(--border); }
-        .nav-item { cursor: pointer; font-weight: 600; color: var(--text2); transition: color 0.2s; }
-        .nav-item.active { color: var(--cyan); }
-        
-        .header-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; padding: 20px; }
-        .stat-card { background: var(--surface); padding: 15px; border-radius: 8px; border: 1px solid var(--border); }
-        .stat-val { font-size: 24px; font-weight: 800; color: var(--cyan); }
-        .stat-label { font-size: 11px; text-transform: uppercase; color: var(--text2); letter-spacing: 1px; }
-
-        .main-content { display: grid; grid-template-columns: 1fr 350px; gap: 20px; padding: 0 20px 20px; }
-        .page { display: none; }
-        .page.active { display: block; }
-
-        .card { background: var(--surface); border-radius: 12px; border: 1px solid var(--border); padding: 20px; margin-bottom: 20px; }
-        .agent-name { font-weight: 800; font-size: 18px; }
-        .badge { font-size: 10px; padding: 2px 6px; border-radius: 4px; font-weight: 700; }
-        .badge.ok { background: rgba(0,255,136,0.1); color: var(--green); }
-        .badge.dead { background: rgba(255,75,75,0.1); color: var(--red); }
-
-        /* Map Container */
-        .map-container { position: relative; background: #000; border-radius: 8px; overflow: hidden; height: 500px; border: 1px solid var(--border); margin-top: 15px; }
-        #stream-frame { width: 100%; height: 100%; border: none; }
-        
-        .stream-overlay-label { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.7); padding: 4px 8px; 
-                                border-radius: 4px; font-size: 10px; font-weight: 800; color: var(--cyan); 
-                                border: 1px solid var(--cyan); pointer-events: none; }
-
-        /* Logs */
-        .log-container { background: var(--surface); border-radius: 8px; border: 1px solid var(--border); display: flex; flex-direction: column; height: 500px; }
-        .log-header { padding: 10px 15px; border-bottom: 1px solid var(--border); font-size: 12px; font-weight: 600; display: flex; justify-content: space-between; }
-        #log-box { flex: 1; overflow-y: auto; padding: 10px; font-family: 'JetBrains Mono', monospace; font-size: 11px; line-height: 1.5; }
-        .log-line { margin-bottom: 4px; border-bottom: 1px solid rgba(255,255,255,0.02); padding-bottom: 2px; }
-        .lvl-info { color: var(--text2); }
-        .lvl-success { color: var(--green); }
-        .lvl-error { color: var(--red); }
-        .ts { color: #555; margin-right: 8px; }
-
-        .bar-track { height: 6px; background: var(--surface2); border-radius: 3px; margin-top: 4px; overflow: hidden; }
-        .bar-fill { height: 100%; transition: width 0.3s ease; }
-        .hp { background: var(--red); }
-        .ep { background: var(--cyan); }
-        
-        .info-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-top: 15px; }
-        .info-block h4 { font-size: 10px; text-transform: uppercase; color: var(--text2); margin: 0 0 5px 0; }
-        .items { display: flex; flex-wrap: wrap; gap: 4px; }
-        .item-tag { font-size: 10px; background: var(--surface2); padding: 2px 6px; border-radius: 3px; border-left: 2px solid var(--cyan); }
+        body { margin: 0; background: #0a0a0c; color: #eee; font-family: 'Inter', sans-serif; overflow: hidden; }
+        .container { display: grid; grid-template-columns: 350px 1fr; height: 100vh; }
+        .sidebar { background: #121216; border-right: 1px solid #333; padding: 15px; display: flex; flex-direction: column; gap: 10px; }
+        .viewer { flex-grow: 1; position: relative; background: #000; }
+        iframe { width: 100%; height: 100%; border: none; }
+        .stat-card { background: #1c1c21; padding: 10px; border-radius: 6px; font-size: 0.9em; }
+        .feed { flex-grow: 1; overflow-y: auto; font-size: 0.8em; color: #aaa; border-top: 1px solid #333; padding-top: 10px; }
+        .tag { display: inline-block; padding: 2px 5px; border-radius: 3px; font-size: 0.75em; margin-right: 5px; }
+        .thought { background: #3b2b5e; color: #d1b3ff; }
+        .game { background: #223322; color: #b3ffb3; }
     </style>
 </head>
 <body>
-    <div class="nav">
-        <div class="nav-item active" data-page="dashboard" onclick="showPage('dashboard')">DASHBOARD</div>
-        <div class="nav-item" data-page="memory" onclick="showPage('memory')">MEMORY & GROWTH</div>
-        <div class="nav-item" data-page="data" onclick="showPage('data')">ACCOUNTS</div>
+    <div class="container">
+        <div class="sidebar">
+            <h2 style="margin:0; font-size: 1.2em; color: #ff5e00;">Mymm Agent</h2>
+            <div id="stats" class="stat-card">Connecting...</div>
+            <div id="live-feed" class="feed"></div>
+        </div>
+        <div class="viewer">
+            <iframe id="spectator-frame" src="about:blank"></iframe>
+        </div>
     </div>
 
-    <div class="header-stats">
-        <div class="stat-card"><div class="stat-val" id="h-agents">0</div><div class="stat-label">Agents</div></div>
-        <div class="stat-card"><div class="stat-val" id="h-playing">0</div><div class="stat-label">Active</div></div>
-        <div class="stat-card"><div class="stat-val" id="h-wins">0</div><div class="stat-label">Total Wins</div></div>
-        <div class="stat-card"><div class="stat-val" id="h-smoltz">0</div><div class="stat-label">sMoltz</div></div>
-    </div>
+    <script>
+        const statsDiv = document.getElementById('stats');
+        const feedDiv = document.getElementById('live-feed');
+        const iframe = document.getElementById('spectator-frame');
+        let currentGid = "";
 
-    <main class="main-content">
-        <div id="page-dashboard" class="page active">
-            <div id="agent-cards">
-                <!-- Agent cards injected here via app.js -->
-            </div>
-            
-            <div class="card">
-                <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <h3 style="margin:0">Mymm Live Broadcast Feed</h3>
-                    <span style="font-size:10px; color:var(--text2)">OFFICIAL GAME STREAM INTERFACE</span>
-                </div>
-                <div class="map-container">
-                    <div class="stream-overlay-label">LIVE GAME FEED</div>
-                    <iframe id="stream-frame" src="about:blank"></iframe>
-                </div>
-            </div>
-        </div>
+        const ws = new WebSocket(`ws://${location.host}/ws`);
+        ws.onmessage = (event) => {
+            const msg = JSON.parse(event.data);
+            if (msg.type === "snapshot") {
+                const agents = msg.data.agents;
+                const firstAgent = Object.values(agents)[0];
+                if (firstAgent) updateUI(firstAgent, msg.data.logs);
+            }
+        };
 
-        <div id="page-memory" class="page">
-            <div class="card">
-                <h3>Cross-Game Lessons</h3>
-                <div id="mem-lessons-list" style="display:flex; flex-direction:column; gap:10px;"></div>
-            </div>
-        </div>
+        function updateUI(agent, logs) {
+            // Update Stats
+            statsDiv.innerHTML = `
+                <div><b>HP:</b> ${agent.hp} | <b>EP:</b> ${agent.ep}</div>
+                <div><b>Loc:</b> ${agent.rg} | <b>Kills:</b> ${agent.kills}</div>
+                <div><b>Action:</b> ${agent.last_action}</div>
+            `;
 
-        <div id="page-data" class="page">
-            <div class="card">
-                <h3>Account Management</h3>
-                <table style="width:100%; text-align:left; border-collapse:collapse;">
-                    <thead><tr style="color:var(--text2); font-size:12px;"><th>AGENT</th><th>API KEY</th><th>MODE</th></tr></thead>
-                    <tbody id="data-tbody"></tbody>
-                </table>
-            </div>
-        </div>
+            // Update Iframe if game ID changed
+            if (agent.gid && agent.gid !== currentGid) {
+                currentGid = agent.gid;
+                // Reconstruct the full spectator URL
+                const url = agent.spectator_url || `https://www.clawroyale.ai/games/spect/${agent.game_id}`;
+                if (iframe.src !== url) iframe.src = url;
+            }
 
-        <aside class="log-container">
-            <div class="log-header">LIVE FEED <span id="log-count"></span></div>
-            <div id="log-box"></div>
-        </aside>
-    </main>
-
-    <script src="/static/app.js"></script>
+            // Update Logs
+            feedDiv.innerHTML = logs.slice(-15).reverse().map(l => {
+                const typeClass = l.type === 'thought' ? 'thought' : 'game';
+                return `<div><span class="tag ${typeClass}">${l.type}</span>${l.text}</div>`;
+            }).join('');
+        }
+    </script>
 </body>
 </html>

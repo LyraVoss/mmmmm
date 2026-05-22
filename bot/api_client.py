@@ -64,6 +64,8 @@ class MoltyAPI:
         """Rate-limited request with error handling."""
         await rest_limiter.acquire()
         await self._ensure_client()
+        # Pylance fix: ensure client is recognized as non-None after _ensure_client()
+        assert self._client is not None
         try:
             resp = await self._client.request(method, path, **kwargs)
         except httpx.TimeoutException:
@@ -168,6 +170,10 @@ class MoltyAPI:
     async def get_join_status(self) -> dict:
         """GET /join/status — check queue status without new request."""
         return await self._request("GET", "/join/status")
+
+    async def get_game_details(self, game_id: str) -> dict:
+        """GET /games/{gameId} — get full game state (spectator data)."""
+        return await self._request("GET", f"/games/{game_id}")
 
     # ── Paid join ─────────────────────────────────────────────────────
 

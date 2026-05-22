@@ -42,6 +42,7 @@ Uses ALL view fields from api-summary.md:
 - recentMessages: regional/private/broadcast messages
 - aliveCount: remaining alive agents
 """
+from typing import List, Dict, Any, Optional
 from bot.utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -100,10 +101,27 @@ _tactical_plan: dict = {
     "turns_in_state": 0,
     "bait_region_id": None
 }
+# Chat responses queued for the next available action slot
+_pending_chat_responses: list = []
 
+class GameAdapter:
+    """Interface for game-specific data and logic."""
+    def __init__(self, name: str):
+        self.game_name = name
+        
+    def get_danger_map(self, view): raise NotImplementedError
+    def get_action_priority(self, view): raise NotImplementedError
 
-def calc_damage(atk: int, weapon_bonus: int, target_def: int,
-                weather: str = "clear") -> int:
+class ClawRoyaleAdapter(GameAdapter):
+    """Logic specific to the Claw Royale 'Battle Royale' mechanics."""
+    def __init__(self):
+        super().__init__("ClawRoyale")
+
+    def get_danger_map(self, view):
+        # Moved existing DZ logic here...
+        pass
+
+def calc_damage(atk: int, weapon_bonus: int, target_def: int, weather: str = "clear") -> int:
     """Damage formula per combat-items.md + game-systems.md weather penalty."""
     base = atk + weapon_bonus - int(target_def * 0.5)
     penalty = WEATHER_COMBAT_PENALTY.get(weather, 0.0)
@@ -1010,7 +1028,7 @@ def _find_path_to(start_id, end_id, view, stealth=False, avoid_direct=False) -> 
     return candidates[0][0]
 
 
-def _is_honey_pot(region_id: str, visible_items: list, visible_agents: list) -> bool:
+def _is_honey_pot(region_id: str, visible_items: List[Any], visible_agents: List[Any]) -> bool:
     """Detects traps: high-value items in regions overlooked by snipers in perches."""
     items_here = [i for i in visible_items if i.get("regionId") == region_id]
     high_value = any(i.get("typeId", "").lower() in ["katana", "sniper", "medkit"] for i in items_here)
@@ -1026,8 +1044,8 @@ def _is_honey_pot(region_id: str, visible_items: list, visible_agents: list) -> 
     return False
 
 
-def _choose_move_target(connections, danger_ids: set,
-                         current_region: dict, visible_items: list,
+def _choose_move_target(connections: List[Any], danger_ids: set,
+                         current_region: Dict[str, Any], visible_items: List[Any],
                          alive_count: int, is_night: bool = False,
                          play_stealthy: bool = False,
                          be_aggressive: bool = False,
