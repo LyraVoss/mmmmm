@@ -15,7 +15,7 @@ from bot.utils.logger import get_logger
 
 log = get_logger(__name__)
 
-RAILWAY_API_URL = "https://backboard.railway.
+RAILWAY_API_URL = "https://backboard.railway.app/graphql/v2"
 
 def is_railway() -> bool:
     """Check if running on Railway."""
