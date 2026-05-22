@@ -517,7 +517,7 @@ class WebSocketEngine:
         view["tacticalIntel"] = tactical_intel
 
         if OPENAI_API_KEY:
-            from bot.strategy.openai_logic import decide_action_openai
+            from bot.utils.openai_logic import decide_action_openai
             decision = await decide_action_openai(view, can_act, lessons=lessons, memory=self.memory)
         else:
             from bot.strategy.brain import decide_action

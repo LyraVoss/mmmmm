@@ -239,7 +239,7 @@ Consider the following architectural suggestions from past game analyses:
 
 """
 
-async def decide_action_openai(view: dict, can_act: bool, lessons: list = None) -> dict:
+async def decide_action_openai(view: dict, can_act: bool, lessons: list = None, memory=None) -> dict:
     """Call OpenAI to get the next best move."""
     if not client:
         log.error("OpenAI client not initialized. Check OPENAI_API_KEY.")
