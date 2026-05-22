@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ── Skill / API version ──────────────────────────────────────────────
-SKILL_VERSION = "1.6.2"
+SKILL_VERSION = "1.7.0"
 
 # ── URLs ──────────────────────────────────────────────────────────────
 API_BASE = "https://cdn.moltyroyale.com/api"
@@ -54,7 +54,7 @@ MEMORY_FILE = MEMORY_DIR / "molty-royale-context.json"
 # ── Environment variables ─────────────────────────────────────────────
 AGENT_NAME = os.getenv("AGENT_NAME", "")
 ADVANCED_MODE = os.getenv("ADVANCED_MODE", "true").lower() == "true"
-ROOM_MODE = os.getenv("ROOM_MODE", "free")  # free | auto | paid
+ROOM_MODE = os.getenv("ROOM_MODE", "free")  # Force 'free' for 24/7 free play
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 API_KEY = os.getenv("API_KEY", "")
 AGENT_PRIVATE_KEY = os.getenv("AGENT_PRIVATE_KEY", "")
