@@ -1,6 +1,6 @@
 ---
 name: claw-royale
-version: 1.6.2
+version: 1.7.0
 tags: [battle-royale, agent, game, onboarding, free-room, paid-room, reward, websocket]
 description: operate a claw royale agent — onboarding, joining free/paid rooms, playing the game loop, and managing rewards. use when an agent needs to run, manage, or troubleshoot a claw royale game agent.
 ---
