@@ -143,6 +143,7 @@ async def sync_all_to_railway(creds: dict, agent_pk: str, owner_pk: str = ""):
         "LOG_LEVEL": LOG_LEVEL,
         # Credentials
         "API_KEY": creds.get("api_key", ""),
+        "SKILL_VERSION": "1.6.2",
         "AGENT_NAME": creds.get("agent_name", ""),
         "AGENT_WALLET_ADDRESS": creds.get("agent_wallet_address", ""),
         "OWNER_EOA": creds.get("owner_eoa", ""),
