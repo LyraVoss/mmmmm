@@ -49,15 +49,17 @@ async def register_identity_onchain(owner_private_key: str) -> int | None:
         receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=60)
 
         if receipt.status != 1:
-            log.error("ERC-8004 register() TX failed: %s", tx_hash.hex())
             return None
 
-        # Extract agentId from Transfer event logs (ERC-721 mint)
+        # Extract agentId from Registered event logs
         for event_log in receipt.logs:
-            if len(event_log.topics) >= 4:
-                token_id = int(event_log.topics[3].hex(), 16)
-                log.info("ERC-8004 registered: tokenId=%d tx=%s", token_id, tx_hash.hex())
-                return token_id
+            try:
+                event = registry.events.Registered().process_receipt(receipt, errors=Web3.DISCARD)[0]
+                agent_id = event["args"]["agentId"]
+                log.info("✅ ERC-8004 registered: tokenId=%d", agent_id)
+                return agent_id
+            except Exception:
+                continue
 
         log.warning("Could not extract tokenId from logs")
         return None
@@ -65,4 +67,3 @@ async def register_identity_onchain(owner_private_key: str) -> int | None:
     except Exception as e:
         log.error("ERC-8004 register() error (gas is delegated — this is a client-side issue): %s", e)
         return None
-

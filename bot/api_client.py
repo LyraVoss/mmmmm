@@ -31,7 +31,7 @@ class MoltyAPI:
         if self._client is None or self._client.is_closed:
             self._client = httpx.AsyncClient(
                 base_url=API_BASE,
-                timeout=httpx.Timeout(30.0, connect=10.0),
+                timeout=httpx.Timeout(45.0, connect=10.0, read=30.0),
                 headers=self._headers(),
             )
 
@@ -64,7 +64,10 @@ class MoltyAPI:
         """Rate-limited request with error handling."""
         await rest_limiter.acquire()
         await self._ensure_client()
-        resp = await self._client.request(method, path, **kwargs)
+        try:
+            resp = await self._client.request(method, path, **kwargs)
+        except httpx.TimeoutException:
+            raise APIError("TIMEOUT", "Request timed out", 408)
 
         # Handle version mismatch
         if resp.status_code == 426:
@@ -157,39 +160,10 @@ class MoltyAPI:
     async def post_join(self, entry_type: str = "free") -> dict:
         """POST /join — enter free matchmaking queue (Long Poll ~15s)."""
         log.debug("Joining queue: entryType=%s", entry_type)
-        # Long poll can take up to 15s
-        await self._ensure_client()
-        await rest_limiter.acquire()
-        resp = await self._client.post(
-            "/join",
-            json={"entryType": entry_type},
-            timeout=httpx.Timeout(20.0),
+        # Use _request to benefit from centralized error/timeout handling
+        return await self._request(
+            "POST", "/join", json={"entryType": entry_type}, timeout=httpx.Timeout(45.0)
         )
-
-        # Handle version mismatch
-        if resp.status_code == 426:
-            raise APIError("VERSION_MISMATCH", "Skill version outdated", 426)
-
-        # Handle rate limiting
-        if resp.status_code == 429:
-            raise APIError("RATE_LIMITED", "Too many requests", 429)
-
-        data = self._safe_parse_json(resp.text)
-
-        # Check for error response shape (per errors.md)
-        if isinstance(data, dict) and not data.get("success", True) and "error" in data:
-            err = data["error"]
-            raise APIError(
-                err.get("code", "UNKNOWN") if isinstance(err, dict) else "UNKNOWN",
-                err.get("message", "Unknown error") if isinstance(err, dict) else str(err),
-                resp.status_code,
-            )
-
-        # Extract data per api-summary.md response shape
-        if isinstance(data, dict) and "data" in data:
-            result = data["data"]
-            return result if isinstance(result, dict) else {"value": result, "_raw": data}
-        return data if isinstance(data, dict) else {"_raw": data}
 
     async def get_join_status(self) -> dict:
         """GET /join/status — check queue status without new request."""

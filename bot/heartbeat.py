@@ -110,6 +110,10 @@ class Heartbeat:
                 log.error("Invalid API key. Re-run setup.")
                 self.running = False
                 return
+            if e.code == "TIMEOUT":
+                log.warning("Heartbeat cycle timed out (ReadTimeout). Retrying immediately.")
+                await asyncio.sleep(1)
+                return
             raise
 
         state, ctx = determine_state(me)

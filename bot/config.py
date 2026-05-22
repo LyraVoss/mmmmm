@@ -34,6 +34,7 @@ REPUTATION_REGISTRY = "0x8004BAa17C55a88189AE136b182e5fdA19dE9b63"
 # ── Economy constants (from economy.md) ───────────────────────────────
 PAID_ENTRY_FEE_MOLTZ = 500
 PAID_ENTRY_FEE_SMOLTZ = 500
+MAX_LESSONS_TO_REMEMBER = 20 # For AgentMemory
 FREE_ROOM_POOL = 1000
 GUARDIAN_KILL_POOL_SHARE = 0.60  # 60%
 
@@ -59,8 +60,14 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 API_KEY = os.getenv("API_KEY", "")
 AGENT_PRIVATE_KEY = os.getenv("AGENT_PRIVATE_KEY", "")
 AGENT_WALLET_ADDRESS = os.getenv("AGENT_WALLET_ADDRESS", "")
+MONGODB_URI = os.getenv("MONGODB_URI", "")
 OWNER_EOA = os.getenv("OWNER_EOA", "")
 OWNER_PRIVATE_KEY = os.getenv("OWNER_PRIVATE_KEY", "")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
+POST_GAME_ANALYSIS_ENABLED = os.getenv("POST_GAME_ANALYSIS_ENABLED", "true").lower() == "true"
+MAX_SUGGESTIONS_TO_REMEMBER = 5 # For AgentMemory
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
 
 # ── First-Run Intake answers (setup.md lines 29-39) ──────────────────
 # These replace the interactive yes/no prompts for Railway/Docker.

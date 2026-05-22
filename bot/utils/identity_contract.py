@@ -1,0 +1,62 @@
+"""
+Web3 Identity Contract Interaction for ERC-8004 Registration.
+Handles on-chain registration on CROSS Mainnet per identity.md.
+"""
+from web3 import Web3
+from bot.config import CROSS_RPC, IDENTITY_REGISTRY, OWNER_PRIVATE_KEY
+from bot.utils.logger import get_logger
+
+log = get_logger(__name__)
+
+ERC8004_ABI = [
+    {"inputs": [], "name": "register", "outputs": [{"internalType": "uint256", "name": "agentId", "type": "uint256"}], "stateMutability": "nonpayable", "type": "function"},
+    {"anonymous": False, "inputs": [{"indexed": True, "internalType": "address", "name": "owner", "type": "address"}, {"indexed": False, "internalType": "uint256", "name": "agentId", "type": "uint256"}], "name": "Registered", "type": "event"}
+]
+
+async def register_erc8004_onchain() -> int:
+    """
+    Calls register() on the ERC-8004 contract from Owner EOA.
+    Gas is delegated, but we set a manual gasLimit as per identity.md.
+    """
+    if not OWNER_PRIVATE_KEY:
+        log.error("OWNER_PRIVATE_KEY missing. Cannot register on-chain.")
+        return 0
+    
+    w3 = Web3(Web3.HTTPProvider(CROSS_RPC))
+    account = w3.eth.account.from_key(OWNER_PRIVATE_KEY)
+    contract = w3.eth.contract(address=Web3.to_checksum_address(IDENTITY_REGISTRY), abi=ERC8004_ABI)
+
+    log.info("Registering ERC-8004 NFT on-chain for %s...", account.address)
+
+    try:
+        # Build transaction
+        tx = contract.functions.register().build_transaction({
+            "from": account.address,
+            "nonce": w3.eth.get_transaction_count(account.address),
+            "gas": 200000, # Manual limit per identity.md section 5
+            "gasPrice": w3.eth.gas_price
+        })
+
+        signed_tx = w3.eth.account.sign_transaction(tx, OWNER_PRIVATE_KEY)
+        tx_hash = w3.eth.send_raw_transaction(signed_tx.raw_transaction)
+        log.info("Registration TX sent: %s", tx_hash.hex())
+        
+        receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
+        if receipt.status == 0:
+            log.error("On-chain registration transaction failed.")
+            return None
+
+        # Extract agentId from the 'Registered' event
+        for log_entry in receipt.logs:
+            try:
+                event = contract.events.Registered().process_receipt(receipt, errors=Web3.DISCARD)[0]
+                agent_id = event["args"]["agentId"]
+                log.info("✅ ERC-8004 NFT registered on-chain. agentId (tokenId): %s", agent_id)
+                return agent_id
+            except Exception:
+                continue # Not a Registered event, or parsing failed
+        log.error("Could not find 'Registered' event in transaction receipt.")
+        return None
+    except Exception as e:
+        log.error("On-chain registration failed: %s", e)
+        return None

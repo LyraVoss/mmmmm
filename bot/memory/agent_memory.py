@@ -10,9 +10,11 @@ Memory disimpen di 2 tempat:
 import json
 import os
 import urllib.request
+from datetime import datetime, timezone
+from motor.motor_asyncio import AsyncIOMotorClient
 from pathlib import Path
 from typing import Optional
-from bot.config import MEMORY_DIR, MEMORY_FILE
+from bot.config import MEMORY_DIR, MEMORY_FILE, MONGODB_URI, MAX_LESSONS_TO_REMEMBER
 from bot.utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -48,6 +50,15 @@ class AgentMemory:
     def __init__(self):
         self.data = dict(DEFAULT_MEMORY)
         self._loaded = False
+        self._db_client = None
+        self._collection = None
+
+        if MONGODB_URI:
+            try:
+                self._db_client = AsyncIOMotorClient(MONGODB_URI)
+                self._collection = self._db_client["openclaw"]["agent_memory"]
+            except Exception as e:
+                log.warning("MongoDB init failed: %s", e)
 
     async def load(self):
         """Load memory from disk + Railway Variables (v1.6.0)."""
@@ -65,12 +76,24 @@ class AgentMemory:
                 self.data = dict(DEFAULT_MEMORY)
         else:
             log.info("No memory file — starting fresh")
+
+        # Priority 1: MongoDB (Survives everything)
+        if self._collection is not None:
+            await self.load_from_mongodb()
+            return
+
         # v1.6.0: restore lessons dari Railway Variables (survive redeploy!)
         await self.load_from_railway()
 
     async def save(self):
         """Persist memory to disk AND sync to Railway Variables (v1.6.0)."""
         MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+
+        # Priority 1: MongoDB Sync
+        if self._collection is not None:
+            await self.sync_to_mongodb()
+            # We still write to disk as a local cache/fallback
+
         MEMORY_FILE.write_text(
             json.dumps(self.data, indent=2, ensure_ascii=False),
             encoding="utf-8",
@@ -87,6 +110,9 @@ class AgentMemory:
 
     def get_lessons(self) -> list:
         return self.data.get("overall", {}).get("history", {}).get("lessons", [])
+
+    def get_suggestions(self) -> list:
+        return self.data.get("overall", {}).get("history", {}).get("suggestions", [])
 
     # ── Temp (per-game) ───────────────────────────────────────────────
 
@@ -121,13 +147,52 @@ class AgentMemory:
         old_avg = history["avgKills"]
         history["avgKills"] = round(((old_avg * (total - 1)) + kills) / total, 2)
 
-    def add_lesson(self, lesson: str, max_lessons: int = 20):
+    def add_lesson(self, lesson: dict, max_lessons: int = MAX_LESSONS_TO_REMEMBER):
         """Append a new lesson, keeping max_lessons most recent."""
         lessons = self.data["overall"]["history"]["lessons"]
-        if lesson not in lessons:
-            lessons.append(lesson)
+        # Check if a similar lesson already exists to avoid duplicates
+        # For structured lessons, this might involve a more complex comparison
+        if not any(l.get("reason") == lesson.get("reason") for l in lessons):
+            lessons.append({
+                "timestamp": datetime.now().isoformat(),
+                **lesson
+            })
             if len(lessons) > max_lessons:
                 lessons.pop(0)
+
+    # ── MongoDB persistence (v1.7.1) ────────────────────────────────
+
+    async def sync_to_mongodb(self):
+        """Upsert the overall memory state to MongoDB cluster."""
+        if self._collection is None:
+            return
+        try:
+            # Singleton document for the agent's brain
+            await self._collection.replace_one(
+                {"_id": "mymm_brain_v1"},
+                { # Store the entire overall section
+                    "overall": self.data["overall"], 
+                    "last_updated": datetime.now(timezone.utc).isoformat()
+                },
+                upsert=True
+            )
+            log.info("✅ Brain synced to MongoDB cluster")
+        except Exception as e:
+            log.warning("MongoDB sync failed: %s", e)
+
+    async def load_from_mongodb(self):
+        """Restore the agent's brain from the MongoDB cluster."""
+        if self._collection is None:
+            return
+        doc = await self._collection.find_one({"_id": "mymm_brain_v1"})
+        if doc and "overall" in doc:
+            # Deep merge overall data, prioritizing MongoDB for history/lessons/suggestions
+            self.data["overall"]["identity"].update(doc["overall"].get("identity", {}))
+            self.data["overall"]["strategy"].update(doc["overall"].get("strategy", {}))
+            self.data["overall"]["history"].update(doc["overall"].get("history", {}))
+            # Ensure lessons are merged and deduplicated if both local and DB have them
+            self.data["overall"]["history"]["lessons"] = list(dict.fromkeys(self.data["overall"]["history"]["lessons"] + doc["overall"]["history"].get("lessons", [])))[-MAX_LESSONS_TO_REMEMBER:]
+            log.info("✅ Brain restored from MongoDB cluster")
 
     # ── Railway Variables persistent memory (v1.6.0) ─────────────────
 

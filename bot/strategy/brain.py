@@ -151,7 +151,7 @@ def mark_item_picked_up(item_id: str):
     _picked_up_ids.add(item_id)
 
 
-def decide_action(view: dict, can_act: bool, lessons: list | None = None) -> dict | None:
+def decide_action(view: dict, can_act: bool, lessons: list | None = None, memory=None) -> dict | None:
     """
     Main decision engine. Returns action dict or None (wait).
 

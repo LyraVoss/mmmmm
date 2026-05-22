@@ -20,11 +20,11 @@ import asyncio
 import aiohttp
 import websockets
 import random
-from bot.config import WS_URL, SKILL_VERSION
+from bot.config import WS_URL, SKILL_VERSION, OPENAI_API_KEY
 from bot.credentials import get_api_key
 from bot.game.action_sender import ActionSender, COOLDOWN_ACTIONS, FREE_ACTIONS
 from bot.utils.evolution_manager import EvolutionManager
-from bot.strategy.brain import decide_action, reset_game_state, learn_from_map, mark_item_picked_up, queue_chat_response
+from bot.strategy.brain import reset_game_state, learn_from_map, mark_item_picked_up, queue_chat_response
 from bot.dashboard.state import dashboard_state
 from bot.utils.rate_limiter import ws_limiter
 from bot.utils.logger import get_logger
@@ -488,7 +488,37 @@ class WebSocketEngine:
         can_act = self.action_sender.can_send_cooldown_action()
         # Inject turn number for Day/Night awareness
         view["turn"] = getattr(self, "last_turn_num", 1)
-        decision = decide_action(view, can_act, lessons=lessons)
+
+        # ── Tactical Intel Injection ──
+        # Identify agents moving away from points of interest or loitering near loot
+        cache_regions = [
+            r["id"] for r in view.get("visibleRegions", [])
+            if any(i.get("type") == "supply_cache" for i in r.get("interactables", []))
+        ]
+
+        tactical_intel = {
+            "choke_points": [r["id"] for r in view.get("visibleRegions", []) if len(r.get("connections", [])) > 3],
+            "high_value_targets": [
+                a["id"] for a in view.get("visibleAgents", [])
+                if _known_agents.get(a["id"], {}).get("stationary_turns", 0) > 1 and not a.get("isDeathZone")
+            ],
+            "supply_cache_looters": [
+                a["id"] for a in view.get("visibleAgents", [])
+                if a.get("regionId") in cache_regions and _known_agents.get(a["id"], {}).get("stationary_turns", 0) > 2
+            ],
+            "overencumbered_targets": [
+                a["id"] for a in view.get("visibleAgents", [])
+                if a.get("inventoryCount", 0) >= 9 or a.get("moltz", 0) > 200
+            ]
+        }
+        view["tacticalIntel"] = tactical_intel
+
+        if OPENAI_API_KEY:
+            from bot.strategy.openai_logic import decide_action_openai
+            decision = await decide_action_openai(view, can_act, lessons=lessons, memory=self.memory)
+        else:
+            from bot.strategy.brain import decide_action
+            decision = decide_action(view, can_act, lessons=lessons)
 
         if decision is None:
             return

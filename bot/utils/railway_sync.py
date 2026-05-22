@@ -127,7 +127,7 @@ async def sync_all_to_railway(creds: dict, agent_pk: str, owner_pk: str = ""):
     from bot.config import (
         ROOM_MODE, ADVANCED_MODE, AUTO_WHITELIST,
         AUTO_SC_WALLET, ENABLE_MEMORY, ENABLE_AGENT_TOKEN,
-        AUTO_IDENTITY, LOG_LEVEL,
+        AUTO_IDENTITY, LOG_LEVEL, OPENAI_API_KEY, OPENAI_MODEL,
     )
 
     # Build complete variables map — ALL in one call = ONE redeploy
@@ -141,6 +141,8 @@ async def sync_all_to_railway(creds: dict, agent_pk: str, owner_pk: str = ""):
         "ENABLE_AGENT_TOKEN": str(ENABLE_AGENT_TOKEN).lower(),
         "AUTO_IDENTITY": str(AUTO_IDENTITY).lower(),
         "LOG_LEVEL": LOG_LEVEL,
+        "OPENAI_API_KEY": OPENAI_API_KEY,
+        "OPENAI_MODEL": OPENAI_MODEL,
         # Credentials
         "API_KEY": creds.get("api_key", ""),
         "SKILL_VERSION": "1.7.0",
