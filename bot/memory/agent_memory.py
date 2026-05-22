@@ -38,6 +38,7 @@ DEFAULT_MEMORY = {
             "wins": 0,
             "avgKills": 0.0,
             "lessons": [],
+            "suggestions": [],
         },
     },
     "temp": {},
@@ -236,6 +237,7 @@ class AgentMemory:
                 headers={
                     "Content-Type": "application/json",
                     "Authorization": f"Bearer {RAILWAY_API_TOKEN}",
+                    "User-Agent": "MoltyRoyale-Agent/1.0"
                 }
             )
             with urllib.request.urlopen(req, timeout=10) as resp:

@@ -15,6 +15,7 @@ Per game-loop.md:
 - can_act_changed: canAct at TOP LEVEL (not nested in data)
 - Only one WS session per API key
 """
+import os
 import json
 import asyncio
 import aiohttp
@@ -373,6 +374,8 @@ class WebSocketEngine:
         ep = self_data.get("ep", "?")
         region = view.get("currentRegion", {})
         region_name = region.get("name", "?") if isinstance(region, dict) else "?"
+        region_terrain = region.get("terrain", "").lower() if isinstance(region, dict) else ""
+        region_weather = region.get("weather", "").lower() if isinstance(region, dict) else ""
         log.info("Status: HP=%s EP=%s Region=%s | Alive: %s", hp, ep, region_name, alive_count)
         dashboard_state.add_log(
             f"HP={hp} EP={ep} Region={region_name} | Alive: {alive_count}",
