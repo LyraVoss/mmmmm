@@ -90,8 +90,9 @@ class Heartbeat:
             except Exception as e:
                 consecutive_errors += 1
                 wait = min(10 * (2 ** min(consecutive_errors - 1, 4)), 120)
+                err_msg = str(e) or type(e).__name__
                 log.error("Heartbeat error (#%d): %s. Retrying in %ds...",
-                          consecutive_errors, e, wait)
+                          consecutive_errors, err_msg, wait)
                 await asyncio.sleep(wait)
 
         if self.api:
