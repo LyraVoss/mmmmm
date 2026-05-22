@@ -100,8 +100,9 @@ class AgentMemory:
             encoding="utf-8",
         )
         log.debug("Memory saved to %s", MEMORY_FILE)
-        # v1.6.0: sync ke Railway Variables biar tidak hilang saat redeploy
-        await self.sync_to_railway()
+        # FIX v1.7.2: sync_to_railway triggers a full service redeploy on Railway.
+        # Use MONGODB_URI for persistence without redeploys. 
+        # await self.sync_to_railway()
 
     def set_agent_name(self, name: str):
         self.data["overall"]["identity"]["name"] = name
