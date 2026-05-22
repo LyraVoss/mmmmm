@@ -1104,8 +1104,6 @@ def _choose_move_target(connections: List[Any], danger_ids: set,
             score -= (risk * 25)  # Heavy penalty for DZ proximity
 
             # Honey Pot Detection
-            if _is_honey_pot(rid, visible_items, []):
-                score -= (20 * risk_penalty_mult)
                 log.debug("🍯 Honey Pot detected at %s, applying risk penalty", rid[:8])
 
             # Path Prediction Penalty

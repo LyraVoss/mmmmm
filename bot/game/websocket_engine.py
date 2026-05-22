@@ -334,7 +334,12 @@ class WebSocketEngine:
 
         # LIVE FEED: Populate with actual game events from the match (like the spectator link)
         for log_entry in view.get("recentLogs", []):
-            log_hash = hash(log_entry)
+            # FIX: Ensure log_entry is hashable even if it's a dictionary (structured log)
+            if isinstance(log_entry, dict):
+                log_hash = hash(json.dumps(log_entry, sort_keys=True))
+            else:
+                log_hash = hash(str(log_entry))
+
             if log_hash not in self._processed_log_hash:
                 dashboard_state.add_log(log_entry, "game", dk)
                 self._processed_log_hash.add(log_hash)
