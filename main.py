@@ -62,6 +62,26 @@ async def start_bot():
             log.error("Orchestration loop error: %s", e)
             await asyncio.sleep(60)
 
+# ASGI application for platforms requiring an 'app' or 'handler' variable
+async def app(scope, receive, send):
+    """Satisfies cloud builders and triggers the bot via ASGI lifespan events."""
+    if scope['type'] == 'lifespan':
+        while True:
+            message = await receive()
+            if message['type'] == 'lifespan.startup':
+                asyncio.create_task(start_bot())
+                await send({'type': 'lifespan.startup.complete'})
+            elif message['type'] == 'lifespan.shutdown':
+                await send({'type': 'lifespan.shutdown.complete'})
+                return
+    else:
+        await send({
+            'type': 'http.response.start',
+            'status': 200,
+            'headers': [[b'content-type', b'text/plain']],
+        })
+        await send({'type': 'http.response.body', 'body': b'Mymm AI Agent is running.'})
+
 if __name__ == "__main__":
     try:
         asyncio.run(start_bot())
