@@ -92,6 +92,14 @@ _map_knowledge: dict = {"revealed": False, "death_zones": set(), "safe_center": 
 _picked_up_ids: set = set()
 # FIX v1.6.4: track move history (last 3) for path prediction and trap detection
 _agent_history: dict = {}
+# TACTICAL: Track state for Counter-Sniper operations
+_tactical_plan: dict = {
+    "state": "SEARCHING",
+    "target_sniper_id": None,
+    "sniper_region_id": None,
+    "turns_in_state": 0,
+    "bait_region_id": None
+}
 
 
 def calc_damage(atk: int, weapon_bonus: int, target_def: int,
@@ -137,11 +145,18 @@ def _get_region_id(entry) -> str:
 
 def reset_game_state():
     """Reset per-game tracking state. Call when game ends."""
-    global _known_agents, _map_knowledge, _picked_up_ids, _agent_history
+    global _known_agents, _map_knowledge, _picked_up_ids, _agent_history, _tactical_plan
     _known_agents = {}
     _map_knowledge = {"revealed": False, "death_zones": set(), "safe_center": []}
     _picked_up_ids = set()
     _agent_history = {}
+    _tactical_plan = {
+        "state": "SEARCHING",
+        "target_sniper_id": None,
+        "sniper_region_id": None,
+        "turns_in_state": 0,
+        "bait_region_id": None
+    }
     log.info("Strategy brain reset for new game")
 
 
